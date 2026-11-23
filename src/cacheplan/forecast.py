@@ -87,7 +87,7 @@ def _units(u: Usage, r: Rules) -> float:
 
 
 def _cost(rows, build_fn, floor, cal, r: Rules) -> float:
-    sim = CacheSim(ttl_short=r.ttl_short, ttl_long=r.ttl_long)
+    sim = CacheSim(ttl_short=r.ttl_short, ttl_long=r.ttl_long, message_entries=r.message_entries)
     return sum(_units(sim.request(build_fn(row), row["ts"], floor, cal.overhead, cal.scale), r) for row in rows)
 
 
@@ -188,7 +188,7 @@ def simulate(rows: list[dict], k: Knowledge, options: list[str]) -> dict:
                         req = strip_cache_control(build(opt, row, k)) if opt.startswith("fix") else strip_cache_control(row["request"])
                         total.add(sim.request(req, row["ts"], floor, cal.overhead, cal.scale))
             else:
-                sim = CacheSim(ttl_short=r.ttl_short, ttl_long=r.ttl_long)
+                sim = CacheSim(ttl_short=r.ttl_short, ttl_long=r.ttl_long, message_entries=r.message_entries)
                 for row in rs:
                     total.add(sim.request(build(opt, row, k), row["ts"], floor, cal.overhead, cal.scale))
             out[app][opt] = total
@@ -239,6 +239,7 @@ class Verdict:
     calibration: Calibration = field(default_factory=Calibration)
     measured: Usage | None = None     # the provider's own counts for this log, if recorded
     rules: Rules = field(default_factory=Rules)   # the provider's caching rules for this model
+    warm_start: bool = False          # the first logged request already read from the cache
 
     @property
     def plan(self) -> BreakPlan:
@@ -354,5 +355,6 @@ def examine(rows: list[dict], k: Knowledge | None = None, min_tokens: int | None
             sum(g > s.ttl_short for g in gaps) / len(gaps) if gaps else 0.0,
             u, pick, reason, fix, k.plans.get(app) or {}, breaks, in_sample,
             k.floors[app], bool(min_tokens) or s.known, sizes[len(sizes) // 2], s.read_x,
-            price if price is not None else s.input_price, cal, measured, s))
+            price if price is not None else s.input_price, cal, measured, s,
+            bool(real_usage(rs[0]) and real_usage(rs[0]).cache_read_input_tokens)))
     return sorted(out, key=lambda v: -v.tokens)

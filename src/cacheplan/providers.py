@@ -37,6 +37,7 @@ class Rules:
     interval: int = 0                  # implicit mode: cache boundaries every N tokens
     forecast: bool = True              # False: diagnosis only, no cost forecast
     automatic: bool = True             # False: no automatic mode, breakpoints only
+    message_entries: bool = False      # a cache write also makes earlier message endings readable
     known: bool = False
     note: str = ""
 
@@ -72,7 +73,7 @@ def _openai(model: str | None) -> Rules:
             read_x = cached / price if price and cached else 0.10
             if gen == "explicit":
                 return Rules("openai", "breakpoints", 1024, 0, price, read_x, 1.25, 2.5, 1800, 43200,
-                             "30-minute", "12-hour", known=True,
+                             "30-minute", "12-hour", known=True, message_entries=True,
                              note="12-hour lifetime is available in the Responses API only")
             return Rules("openai", "implicit", 1024, 0, price, read_x, 1.0, 1.0, 300, 1800,
                          "in-memory", "24h-retention", interval=2048 if "gpt-5.5" in name else 128, known=True,

@@ -36,11 +36,21 @@ def findings(v: Verdict, rows: list[dict], k: Knowledge, show_content: bool = Tr
     out: list[Finding] = []
     groups = summarise(v.breaks)
     tpl = k.templates.get(v.app)
-    head_lost = sum(g["lost_tokens"] for g in groups if g["where"].startswith(("system", "tools")))
+    head_lost = min(v.tokens, sum(g["lost_tokens"] for g in groups if g["where"].startswith(("system", "tools"))))
     slots = tpl.slots() if tpl else []
     for s in slots:
         ex = f' (e.g. "{s.example.replace(chr(10), " ")[:40]}")' if show_content else ""
-        if s.kind == "volatile":
+        if s.kind == "volatile" and v.rules.mode == "implicit":
+            # These models reuse any shared prefix, so only what follows the value is lost.
+            lost = 0
+            if "fix_5m" in v.usage and "auto_5m" in v.usage:
+                lost = max(0, v.usage["fix_5m"].cache_read_input_tokens - v.usage["auto_5m"].cache_read_input_tokens)
+            out.append(Finding("CP001", f"system value <<{s.name}>> changes between requests{ex}; the prompt before "
+                               "it is still reused on this model, what follows it (the conversation history) is not",
+                               "move it to the latest user message, or make it change rarely "
+                               "(a date instead of a timestamp)", lost))
+            head_lost = 0
+        elif s.kind == "volatile":
             out.append(Finding("CP001", f"system value <<{s.name}>> changes between requests{ex}; "
                                "everything after it, including the conversation history, cannot be reused",
                                "move it to the latest user message, or make it change rarely "

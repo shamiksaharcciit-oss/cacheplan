@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
-from .messages import ONE_HOUR, est_tokens, prefix_blocks
+from .messages import ONE_HOUR, est_tokens, located_blocks, prefix_blocks
 from .models import TOOL_USE_OVERHEAD
 
 LOOKBACK = 20
@@ -44,11 +44,21 @@ class Usage:
                 + self.cache_read_input_tokens * read_x)
 
 
+def _unit(path: str) -> str:
+    """The message a block belongs to: "tools", "system" or "messages[i]"."""
+    return path.split(".")[0] if path.startswith("messages") else path.split("[")[0]
+
+
 class CacheSim:
-    def __init__(self, min_tokens: int = 1024, ttl_short: int = 300, ttl_long: int = 3600):
+    def __init__(self, min_tokens: int = 1024, ttl_short: int = 300, ttl_long: int = 3600,
+                 message_entries: bool = False):
         """ttl_short / ttl_long: seconds an entry lives for the two marker kinds
         (5 minutes and 1 hour on Anthropic; 30 minutes and 12 hours on newer OpenAI models)."""
         self.min_tokens, self.ttl_short, self.ttl_long = min_tokens, ttl_short, ttl_long
+        # True: a write also makes every earlier message ending in that prefix readable
+        # (measured on OpenAI gpt-5.6-luna: a new conversation read the shared system message
+        # although the only write had been at the end of another conversation's first turn).
+        self.message_entries = message_entries
         self.entries: dict[bytes, tuple[float, int]] = {}     # prefix hash -> (expiry, lifetime)
 
     def request(self, req: dict, now: float, min_tokens: int | None = None,
@@ -57,7 +67,8 @@ class CacheSim:
         to the character-based token estimate (1.0 = uncalibrated)."""
         floor = self.min_tokens if min_tokens is None else min_tokens
         extra = TOOL_USE_OVERHEAD if overhead is None else overhead
-        blocks = prefix_blocks(req)
+        located = located_blocks(req)
+        blocks = [(text, ttl) for _, text, ttl in located]
         h, hashes, cum = b"", [], []
         total = extra if req.get("tools") else 0               # hidden tool-use instructions
         for text, _ in blocks:
@@ -83,6 +94,12 @@ class CacheSim:
         written = [(bp, ttl) for bp, ttl in bps if bp > read]
         for bp, ttl in written:
             self.entries[hashes[bp]] = (now + ttl, ttl)
+            if self.message_entries:
+                for j in range(read + 1, bp):
+                    here, after = located[j][0], located[j + 1][0]
+                    ends_message = _unit(here) != "tools" and _unit(here) != _unit(after)
+                    if ends_message and cum[j] >= floor and self.entries.get(hashes[j], (0, 0))[0] <= now + ttl:
+                        self.entries[hashes[j]] = (now + ttl, ttl)
         end = max(bps[-1][0], read)
         r = round(cum[read]) if read >= 0 else 0
         w = round(cum[end]) - r

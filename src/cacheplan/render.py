@@ -49,6 +49,10 @@ def _advice(v: Verdict) -> list[str]:
             lines.append(f'Recommendation: set  "prompt_cache_retention": "24h"  - forecast {v.cost("auto_1h"):.0%} ({v.reason}).')
     elif v.recommended == "off":
         lines.append(f"Recommendation: leave caching off as the prompts stand ({v.reason}).")
+        if v.rules.provider == "openai" and "logged" in v.usage and v.cost("logged") > 1.03:
+            lines.append(f"  Caching is on by default on this model and these requests pay {v.cost('logged'):.0%}. "
+                         'Per OpenAI\'s documentation,  "prompt_cache_options": {"mode": "explicit"}  with no breakpoints '
+                         "stops the automatic writes; this project has not tested that setting.")
     elif v.recommended == "logged":
         lines.append(f"Recommendation: keep your current settings - forecast {v.cost('logged'):.0%} "
                      f"of the uncached input cost ({v.reason}).")
@@ -85,7 +89,9 @@ def _check(v: Verdict) -> str | None:
     if opt == "off" and v.measured.cache_creation_input_tokens + v.measured.cache_read_input_tokens:
         return None
     return (f"Forecast check: this log's own settings were forecast at {v.cost(opt):.0%} and the recorded "
-            f"responses show {v.measured_cost:.0%} (read {v.measured.cache_read_input_tokens / max(1, v.measured.total):.0%}).")
+            f"responses show {v.measured_cost:.0%} (read {v.measured.cache_read_input_tokens / max(1, v.measured.total):.0%})."
+            + (" The first request already read from the cache, so it was warm from traffic before this log; "
+               "the forecast starts cold and will read high." if v.warm_start else ""))
 
 
 def text(v: Verdict, fs: list[Finding], name_width: int = 36) -> str:
