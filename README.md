@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/shamiksaharcciit-oss/cacheplan/main/docs/img/results.svg" alt="Input cost with caching relative to no caching: LangGraph ReAct template 125% automatic, 51% with cacheplan; Aider 125% automatic, 66% with cacheplan; Claude Code 27% either way" width="800">
+  <img src="https://raw.githubusercontent.com/shamiksaharcciit-oss/cacheplan/main/docs/img/results.svg" alt="Input cost with caching relative to no caching: LangGraph ReAct template 124% automatic, 48% with cacheplan; Aider 125% automatic, 66% with cacheplan; Claude Code 27% either way" width="800">
 </p>
 
 <p align="center"><sub>LangGraph ReAct template: from the <a href="#benchmark-six-agent-starters">benchmark</a> below. Aider and Claude Code: separate captures of real coding sessions, described under <a href="#how-accurate-is-the-forecast">How accurate is the forecast?</a> Claude Code's figure is a local forecast, not measured.</sub></p>
@@ -344,30 +344,41 @@ bill by more than half. For one it raises the bill, and `cacheplan` says why.
 
 ## How accurate is the forecast?
 
-Forecasts checked with `cacheplan verify` against the live API (one model, short sessions):
+Forecasts checked against the live API. The first nine rows were all produced by cacheplan
+0.3.0a1 on 24 November 2026 (`bench.py verify`, `claude-sonnet-5-5`, short sessions):
 
 | Application | Option | Forecast | Measured |
 | --- | --- | --- | --- |
-| LangGraph ReAct template | Automatic caching, 5-minute | 125% | 124% |
-| LangGraph ReAct template | Prompt fix + breakpoints, 5-minute | 53% | 51% |
-| Anthropic SDK tool loop | Automatic caching, 5-minute | 45% | 46% |
-| LangChain `create_agent` | Automatic caching, 5-minute | 45% | 46% |
-| Pydantic AI `Agent` | Automatic caching, 5-minute | 48% | 48% |
-| smolagents `ToolCallingAgent` | Planned breakpoints, 5-minute | 37% | 36% |
+| LangGraph ReAct template | Automatic caching, 5-minute | 124% | 124% |
+| LangGraph ReAct template | Prompt fix + breakpoints, 5-minute | 50% | 48% |
+| Anthropic SDK tool loop | Automatic caching, 5-minute | 43% | 43% |
+| LangChain `create_agent` | Automatic caching, 5-minute | 42% | 42% |
+| Pydantic AI `Agent` | Automatic caching, 5-minute | 44% | 45% |
+| smolagents `ToolCallingAgent` | Automatic caching, 5-minute | 36% | 36% |
+| smolagents `ToolCallingAgent` | Planned breakpoints, 5-minute | 32% | 32% |
+| CrewAI `Agent` | CrewAI's own caching | 90% | 89% |
+| CrewAI `Agent` | Automatic caching, 5-minute | 97% | 97% |
+
+All nine are within two points; the largest gap is the LangGraph prompt fix. Two things keep
+this from being stronger evidence than it looks. The breakpoint plans and the prompt fix
+were learned on the same captures they are scored on. And the character-to-token ratio the
+forecast uses was tuned on the CrewAI capture after 0.1.0a1 missed it by ten points, so the
+CrewAI rows show that the miss is repaired, not that it was predicted. Prompts near the
+minimum cacheable length remain the least reliable case, and the report warns when that
+applies.
+
+Aider was measured earlier, with cacheplan 0.1.0a1, which priced cache reads at 0.1x where
+the published rate for this model is 0.05x, so its costs are about two points too high:
+
+| Application | Option | Forecast | Measured |
+| --- | --- | --- | --- |
 | Aider | Planned breakpoints, 5-minute | 63% | 62% |
 | Aider | Planned breakpoints, 1-hour | 91% | 90% |
 | Aider | Aider's own caching (`--cache-prompts`) | 65% | 64% |
-| CrewAI `Agent` | CrewAI's own caching | 100% | 90% |
-| CrewAI `Agent` | Automatic caching, 5-minute | 111% | 99% |
 
-Nine of the eleven are within two points. The CrewAI rows are the miss, made by version
-0.1.0a1: its prompts are short, and the forecast wrongly predicted they were below the
-minimum cacheable length. Token counts are estimated from characters, so prompts near the
-minimum remain the least reliable case, and the report now warns when that applies.
-
-For Aider, the breakpoint plan was learned from one session and scored on a different one,
-and it matched Aider's hand-tuned caching. Claude Code was at its ceiling already (27%,
-local model only), and `cacheplan` correctly recommended changing nothing.
+There the breakpoint plan was learned from one session and scored on a different one, and
+it matched Aider's hand-tuned caching. Claude Code was at its ceiling already (27%, local
+forecast only, never measured), and `cacheplan` recommended changing nothing.
 
 ## Limits
 
