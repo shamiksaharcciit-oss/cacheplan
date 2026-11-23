@@ -87,7 +87,7 @@ def _units(u: Usage, r: Rules) -> float:
 
 
 def _cost(rows, build_fn, floor, cal, r: Rules) -> float:
-    sim = CacheSim(ttl_short=r.ttl_short, ttl_long=r.ttl_long)
+    sim = CacheSim(ttl_short=r.ttl_short, ttl_long=r.ttl_long, message_entries=r.message_entries)
     return sum(_units(sim.request(build_fn(row), row["ts"], floor, cal.overhead, cal.scale), r) for row in rows)
 
 
@@ -188,7 +188,7 @@ def simulate(rows: list[dict], k: Knowledge, options: list[str]) -> dict:
                         req = strip_cache_control(build(opt, row, k)) if opt.startswith("fix") else strip_cache_control(row["request"])
                         total.add(sim.request(req, row["ts"], floor, cal.overhead, cal.scale))
             else:
-                sim = CacheSim(ttl_short=r.ttl_short, ttl_long=r.ttl_long)
+                sim = CacheSim(ttl_short=r.ttl_short, ttl_long=r.ttl_long, message_entries=r.message_entries)
                 for row in rs:
                     total.add(sim.request(build(opt, row, k), row["ts"], floor, cal.overhead, cal.scale))
             out[app][opt] = total

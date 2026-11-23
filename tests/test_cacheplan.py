@@ -772,3 +772,19 @@ def test_forecast_check_says_when_the_cache_was_warm_before_the_log(tmp_path, ca
         r["usage"] = {"prompt_tokens": 4000, "prompt_tokens_details": {"cached_tokens": 3200}}
     assert cli.main(["report", _write(tmp_path, "warm.jsonl", rows)]) == 0
     assert "warm from traffic before this log" in capsys.readouterr().out
+
+
+def test_newer_openai_models_reuse_earlier_message_endings_across_conversations():
+    """Measured on gpt-5.6-luna: a new conversation read the shared system message from the
+    cache although the only write so far ended at another conversation's first turn."""
+    def req(question):
+        return {"cache_control": {"type": "ephemeral"}, "system": [{"type": "text", "text": RULEBOOK}],
+                "messages": [{"role": "user", "content": question}]}
+    plain, openai = CacheSim(), CacheSim(message_entries=True)
+    for sim in (plain, openai):
+        sim.request(req("first conversation"), 0)
+    assert plain.request(req("second conversation"), 5).cache_read_input_tokens == 0
+    second = openai.request(req("second conversation"), 5)
+    assert second.cache_read_input_tokens > 0.9 * second.total
+    assert providers.rules("openai", "gpt-5.6-luna").message_entries
+    assert not providers.rules("bedrock", "anthropic.claude-sonnet-5-5").message_entries
