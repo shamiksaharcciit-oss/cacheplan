@@ -313,7 +313,7 @@ As a GitHub Action:
 - uses: actions/setup-python@v7
   with:
     python-version: "3.12"
-- uses: shamiksaharcciit-oss/cacheplan@v0.3.0a1
+- uses: shamiksaharcciit-oss/cacheplan@v0.3.0a2
   with:
     log: captures/session.jsonl
     min-reusable: "0.5"
@@ -326,7 +326,7 @@ The action installs the code of the revision you pin, so the tag decides what ru
 prompt text. Or call the commands directly:
 
 ```yaml
-- run: pip install cacheplan==0.3.0a1
+- run: pip install cacheplan==0.3.0a2
 - run: cacheplan check captures/session.jsonl --min-reusable 0.5
 - run: cacheplan baseline captures/session.jsonl --compare captures/baseline.json
 ```

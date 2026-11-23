@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0a2
 
 - **OpenAI GPT-6.2 and later: top-level `instructions` are no longer treated as a cacheable
   system prompt.** Those models append them after the input and bill them uncached on every
