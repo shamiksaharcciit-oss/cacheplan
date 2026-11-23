@@ -16,6 +16,24 @@ cacheplan proxy, forecasts each caching option and can measure them against the 
 | `smolagents` | smolagents `ToolCallingAgent` through LiteLLM |
 | `crewai` | CrewAI `Agent`, one task per question |
 
+## Results (23 November 2026)
+
+Input cost relative to the same requests without caching, measured on the live Anthropic API
+with `claude-sonnet-5-5`. 13 to 18 requests per framework.
+
+| Framework | Version | As shipped | Automatic caching | Best option measured | Finding |
+| --- | --- | --- | --- | --- | --- |
+| smolagents `ToolCallingAgent` | 1.26.0 | 100% (caching off) | 40% | 36% planned breakpoints | Caching off |
+| Anthropic SDK tool loop | 2.13.0 | 100% (caching off) | 46% | 46% automatic | Caching off |
+| LangChain `create_agent` | 1.5.2 | 100% (caching off) | 46% | 46% automatic | Caching off |
+| Pydantic AI `Agent` | 2.71.0 | 100% (caching off) | 48% | 48% automatic | Caching off |
+| CrewAI `Agent` | 1.15.44 | 90% (caches by default) | 99% | 90% as shipped | Short prompts |
+| LangGraph ReAct template | langgraph 1.2.24 | 100% (caching off) | 124% | 51% after moving the timestamp | Timestamp in the system prompt ([issue](https://github.com/langchain-ai/react-agent/issues/123)) |
+
+cacheplan 0.1.0a1 forecast five of the six within one point. It missed CrewAI (forecast
+100% as shipped and 111% automatic; measured 90% and 99%): its prompts are short, and the
+forecast wrongly predicted they were below the minimum cacheable length.
+
 ## Run it
 
 ```

@@ -22,7 +22,8 @@ from difflib import SequenceMatcher
 
 EPHEMERAL = {"type": "ephemeral"}
 FIVE_MIN, ONE_HOUR = 300, 3600
-CHARS_PER_TOKEN = 3.0        # rough; three live runs measured 2.6 to 3.2 characters per token
+CHARS_PER_TOKEN = 3.5        # rough. Live runs: about 3.4 to 3.5 for prose-heavy prompts once the
+                             # tool-use overhead is counted separately, about 2.6 for code-heavy ones.
 
 
 def cc(ttl: int = FIVE_MIN) -> dict:

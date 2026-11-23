@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from .diagnose import summarise
 from .forecast import Knowledge, Verdict
-from .messages import est_tokens, prefix_blocks, strip_cache_control
+from .messages import prefix_blocks
 
 RULES = {
     "CP001": "a value in the system prompt or tools changes between requests",
@@ -32,8 +32,7 @@ class Finding:
         return f"{self.rule} {self.message}{cost}\n        fix: {self.fix}"
 
 
-def findings(v: Verdict, rows: list[dict], k: Knowledge, min_tokens: int = 1024,
-             show_content: bool = True) -> list[Finding]:
+def findings(v: Verdict, rows: list[dict], k: Knowledge, show_content: bool = True) -> list[Finding]:
     out: list[Finding] = []
     groups = summarise(v.breaks)
     tpl = k.templates.get(v.app)
@@ -80,10 +79,9 @@ def findings(v: Verdict, rows: list[dict], k: Knowledge, min_tokens: int = 1024,
             not any(any(ttl for _, ttl in prefix_blocks(r["request"])) for r in rows):
         out.append(Finding("CP003", "no request sets cache_control, so nothing is cached",
                            "see the recommendation above before switching it on"))
-    sizes = sorted(sum(est_tokens(t) for t, _ in prefix_blocks(strip_cache_control(r["request"]))) for r in rows)
-    if sizes[len(sizes) // 2] < min_tokens:
-        out.append(Finding("CP004", f"the typical prompt is ~{sizes[len(sizes) // 2]:,} tokens; the minimum "
-                           f"cacheable length is set to {min_tokens:,}",
+    if v.typical_tokens < v.minimum:
+        out.append(Finding("CP004", f"the typical prompt is ~{v.typical_tokens:,} tokens (estimate); the minimum "
+                           f"cacheable length for this model is {v.minimum:,}",
                            "nothing to do: prompts this short are not cached"))
     if v.gaps_over_5m >= 0.2:
         out.append(Finding("CP008", f"{v.gaps_over_5m:.0%} of pauses between requests exceed 5 minutes",

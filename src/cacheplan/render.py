@@ -49,6 +49,9 @@ def text(v: Verdict, fs: list[Finding], name_width: int = 36) -> str:
            f"  Layout     {v.layout}",
            f"  Reusable   {v.reusable:.0%} of input tokens repeat an earlier prefix as written",
            f"  Pace       median {v.median_gap:.0f} s between requests; {v.gaps_over_5m:.0%} of pauses over 5 minutes",
+           f"  Minimum    {v.minimum:,} tokens to be cacheable"
+           + ("" if v.minimum_known else " (model not recognised: default used, set --model or --min-tokens)")
+           + f"; typical prompt ~{v.typical_tokens:,}",
            "",
            f"  {'Option':<{name_width}} {'Read':>5}  {'Cost vs no caching':>18}"]
     for opt in OPTIONS:
@@ -58,6 +61,9 @@ def text(v: Verdict, fs: list[Finding], name_width: int = 36) -> str:
     out += [""] + ["  " + l for l in _advice(v)]
     if v.in_sample and v.recommended.startswith(("plan", "fix")) or (v.in_sample and v.fix_option):
         out.append("  Note: the plan was learned from this same log; use --learn-from for an out-of-sample forecast.")
+    if 0.5 * v.minimum <= v.typical_tokens <= 2 * v.minimum:
+        out.append("  Note: prompts are close to the minimum cacheable length, where token estimates decide "
+                   "what is cached. Treat this forecast as rough and run `cacheplan verify`.")
     if fs:
         out += ["", "  Findings"] + ["    " + str(f) for f in fs]
     return "\n".join(out)
@@ -68,6 +74,8 @@ def as_dict(v: Verdict, fs: list[Finding]) -> dict:
         "app": v.app, "requests": v.requests, "input_tokens_estimate": v.tokens, "layout": v.layout,
         "reusable_share": round(v.reusable, 4), "median_gap_seconds": round(v.median_gap, 1),
         "gaps_over_5m": round(v.gaps_over_5m, 4),
+        "minimum_cacheable_tokens": v.minimum, "minimum_known": v.minimum_known,
+        "typical_prompt_tokens_estimate": v.typical_tokens,
         "options": {o: {"label": OPTIONS[o][0], "read_share": round(v.read(o), 4),
                         "cost_vs_no_caching": round(v.cost(o), 4)} for o in OPTIONS if o in v.usage},
         "recommended": v.recommended, "reason": v.reason, "prompt_fix_option": v.fix_option,

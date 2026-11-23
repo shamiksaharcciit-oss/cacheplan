@@ -10,6 +10,7 @@ from .logs import by_app, conversation_key
 from .messages import (FIVE_MIN, ONE_HOUR, BreakPlan, Template, canonicalize_request, cc,
                        est_tokens, learn, learn_breakpoints, place_breakpoints, prefix_blocks,
                        strip_cache_control, system_text)
+from .models import TOOL_USE_OVERHEAD, min_cacheable
 from .sim import CacheSim, Usage
 
 OPTIONS = {     # key -> (label, changes the prompt text)
@@ -61,13 +62,23 @@ def has_fix(rows: list[dict], k: Knowledge) -> bool:
     return bool(tpl and any(s.kind == "volatile" or s.distinct > 1 for s in tpl.slots()))
 
 
-def simulate(rows: list[dict], k: Knowledge, options: list[str], min_tokens: int = 1024) -> dict:
+def row_minimum(row: dict, min_tokens: int | None = None, model: str | None = None) -> int:
+    """Minimum cacheable length for one logged request: an explicit value wins, then an
+    explicit model, then the model named in the request itself."""
+    if min_tokens:
+        return min_tokens
+    return min_cacheable(model or row["request"].get("model"))[0]
+
+
+def simulate(rows: list[dict], k: Knowledge, options: list[str], min_tokens: int | None = None,
+             model: str | None = None) -> dict:
     """{app: {option: Usage}} from the local cache model."""
     out: dict[str, dict[str, Usage]] = defaultdict(dict)
+    floors = [row_minimum(r, min_tokens, model) for r in rows]
     for opt in options:
-        sim = CacheSim(min_tokens)
-        for row in rows:
-            out[row["app"]].setdefault(opt, Usage()).add(sim.request(build(opt, row, k), row["ts"]))
+        sim = CacheSim()
+        for row, floor in zip(rows, floors):
+            out[row["app"]].setdefault(opt, Usage()).add(sim.request(build(opt, row, k), row["ts"], floor))
     return dict(out)
 
 
@@ -107,6 +118,9 @@ class Verdict:
     plan: BreakPlan
     breaks: list[Break]
     in_sample: bool = True
+    minimum: int = 1024               # minimum cacheable length used for this application
+    minimum_known: bool = True        # False when the model was not recognised
+    typical_tokens: int = 0           # median prompt size (estimate)
 
     def cost(self, opt: str) -> float:
         return self.usage[opt].cost_units() / max(1, self.usage["off"].total)
@@ -120,7 +134,8 @@ def _recommend(cost: dict[str, float]) -> tuple[str, str]:
     plain = [o for o in SIMPLICITY if o in cost]
     best = min(plain, key=lambda o: cost[o])
     if "logged" in cost and cost["logged"] < 0.97 and cost["logged"] <= cost[best] + 0.02:
-        return "logged", "your current settings are within 2 points of the best option"
+        return "logged", ("your current settings are the cheapest option" if cost["logged"] <= cost[best]
+                          else "your current settings are within 2 points of the best option")
     if cost[best] >= 0.97:
         return "off", "no option saves at least 3%, and cache writes cost extra"
     pick = next(o for o in plain if cost[o] <= cost[best] + 0.02)       # simplest within 2 points
@@ -142,7 +157,8 @@ def _layout(reusable: float, cost: dict[str, float], breaks: list[Break], fixabl
     return "mixed"
 
 
-def examine(rows: list[dict], k: Knowledge | None = None, min_tokens: int = 1024) -> list[Verdict]:
+def examine(rows: list[dict], k: Knowledge | None = None, min_tokens: int | None = None,
+            model: str | None = None) -> list[Verdict]:
     """One verdict per application. If k is None the plan is learned from the same rows."""
     in_sample = k is None
     k = k or learn_from(rows)
@@ -150,7 +166,7 @@ def examine(rows: list[dict], k: Knowledge | None = None, min_tokens: int = 1024
     options = [o for o in OPTIONS if o != "logged"]
     if any(any(ttl for _, ttl in prefix_blocks(r["request"])) for r in rows):
         options.append("logged")
-    usage = simulate(rows, k, options, min_tokens)
+    usage = simulate(rows, k, options, min_tokens, model)
     out = []
     for app, rs in apps.items():
         u = dict(usage[app])
@@ -171,5 +187,9 @@ def examine(rows: list[dict], k: Knowledge | None = None, min_tokens: int = 1024
                            reusable_share(rs), statistics.median(gaps) if gaps else 0.0,
                            sum(g > FIVE_MIN for g in gaps) / len(gaps) if gaps else 0.0,
                            u, pick, reason, fix, k.plans.get(app) or BreakPlan(head=False, offsets=()),
-                           breaks, in_sample))
+                           breaks, in_sample, row_minimum(rs[0], min_tokens, model),
+                           bool(min_tokens) or min_cacheable(model or rs[0]["request"].get("model"))[1],
+                           sorted(sum(est_tokens(t) for t, _ in prefix_blocks(strip_cache_control(r["request"])))
+                                  + (TOOL_USE_OVERHEAD if r["request"].get("tools") else 0)
+                                  for r in rs)[len(rs) // 2]))
     return sorted(out, key=lambda v: -v.tokens)

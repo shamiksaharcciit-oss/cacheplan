@@ -348,3 +348,58 @@ def test_capture_proxy_logs_body_but_not_the_key(upstream, tmp_path):
     assert "sk-secret" not in logged and _Upstream.seen[0][0] == "sk-secret"
     rows = load(str(out)).rows
     assert len(rows) == 3 and rows[0]["app"] == "demo" and rows[0]["request"]["system"] == "hello"
+
+
+# ------------------------------------------------------------------ model minimums
+def test_minimum_cacheable_length_is_looked_up_by_model():
+    from cacheplan.models import min_cacheable
+    assert min_cacheable("claude-sonnet-5-5") == (512, True)
+    assert min_cacheable("anthropic/claude-sonnet-5-5") == (512, True)
+    assert min_cacheable("claude-sonnet-5") == (1024, True)
+    assert min_cacheable("claude-haiku-4-5-20251001") == (4096, True)
+    assert min_cacheable("claude-opus-4-7") == (2048, True)
+    assert min_cacheable("some-other-model") == (1024, False)
+    assert min_cacheable(None) == (1024, False)
+
+
+def _short_rows(model=None, n=6):
+    """A plain conversation whose prompts are about 700 to 900 estimated tokens."""
+    rows, msgs = [], []
+    for i in range(n):
+        msgs = msgs + [{"role": "user", "content": f"question {i} " * 4}]
+        req = {"system": "policy " * 300, "messages": list(msgs)}
+        if model:
+            req["model"] = model
+        rows.append({"ts": i * 5.0, "app": "short", "request": req})
+        msgs = msgs + [{"role": "assistant", "content": f"answer {i} " * 4}]
+    return rows
+
+
+def test_short_prompts_are_cached_only_when_the_model_allows_it():
+    old = examine(_short_rows("claude-sonnet-5"))[0]            # 1,024-token minimum
+    new = examine(_short_rows("claude-sonnet-5-5"))[0]          # 512-token minimum
+    assert old.minimum == 1024 and old.cost("auto_5m") == pytest.approx(1.0)
+    assert new.minimum == 512 and new.cost("auto_5m") < 0.6
+    assert examine(_short_rows(), model="claude-sonnet-5-5")[0].minimum == 512      # --model
+    assert examine(_short_rows("claude-sonnet-5-5"), min_tokens=4096)[0].minimum == 4096   # --min-tokens wins
+
+
+def test_report_warns_when_prompts_sit_near_the_minimum(tmp_path, capsys):
+    path = _write(tmp_path, "short.jsonl", _short_rows("claude-sonnet-5-5"))
+    cli.main(["report", path])
+    out = capsys.readouterr().out
+    assert "close to the minimum cacheable length" in out and "512 tokens to be cacheable" in out
+    path = _write(tmp_path, "unknown.jsonl", _short_rows())
+    cli.main(["report", path])
+    assert "model not recognised" in capsys.readouterr().out
+
+
+def test_hidden_tool_instructions_count_towards_the_minimum():
+    """A 300-token prompt with tools clears a 512-token minimum; without tools it does not."""
+    tool = {"name": "search", "description": "Search.", "input_schema": {"type": "object", "properties": {}}}
+    base = {"system": "policy " * 120, "messages": [{"role": "user", "content": "hi"}]}
+    for tools, cached in (([tool], True), (None, False)):
+        req = dict(base, **({"tools": tools} if tools else {}))
+        sim = CacheSim(min_tokens=512)
+        sim.request(place_breakpoints(req), 0)
+        assert (sim.request(place_breakpoints(req), 1).cache_read_input_tokens > 0) is cached

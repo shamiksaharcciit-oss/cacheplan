@@ -32,10 +32,10 @@ def _load(args) -> tuple[list[dict], Knowledge | None]:
 
 def cmd_report(a) -> int:
     rows, k = _load(a)
-    verdicts = examine(rows, k, a.min_tokens)
+    verdicts = examine(rows, k, a.min_tokens, a.model)
     k = k or learn_from(rows)
     apps = by_app(rows)
-    results = [(v, findings(v, apps[v.app], k, a.min_tokens, not a.no_content)) for v in verdicts]
+    results = [(v, findings(v, apps[v.app], k, not a.no_content)) for v in verdicts]
     if a.json:
         print(json.dumps({"cacheplan": __version__, "applications": [as_dict(v, f) for v, f in results]}, indent=1))
     else:
@@ -75,7 +75,7 @@ def cmd_check(a) -> int:
     """For pipelines: fail when the reusable share of a log falls below a threshold."""
     rows, k = _load(a)
     bad = 0
-    for v in examine(rows, k, a.min_tokens):
+    for v in examine(rows, k, a.min_tokens, a.model):
         ok = v.reusable >= a.min_reusable
         bad += not ok
         print(f"{'ok  ' if ok else 'FAIL'} {v.app}: {v.reusable:.0%} of input tokens reusable "
@@ -93,7 +93,7 @@ def cmd_gaps(a) -> int:
     print("| --- | --- |" + " --- |" * (len(opts) - 1))
     for scale in [float(x) for x in a.scales.split(",")]:
         scaled = [dict(r, ts=t0 + (r["ts"] - t0) * scale) for r in rows]
-        res = simulate(scaled, k, opts, a.min_tokens)
+        res = simulate(scaled, k, opts, a.min_tokens, a.model)
         tot = {o: sum(per[o].cost_units() for per in res.values()) for o in opts}
         base = sum(per["off"].total for per in res.values())
         d = [y["ts"] - x["ts"] for x, y in zip(scaled, scaled[1:])] or [0]
@@ -106,7 +106,7 @@ def cmd_verify(a) -> int:
     rows, k = _load(a)
     if a.limit:
         rows = rows[:a.limit]
-    verdicts = examine(rows, k, a.min_tokens)
+    verdicts = examine(rows, k, a.min_tokens, a.model)
     k = k or learn_from(rows)
     wanted = ["auto_5m"] + sorted({v.recommended for v in verdicts} | {v.fix_option for v in verdicts if v.fix_option})
     if a.options:
@@ -119,7 +119,7 @@ def cmd_verify(a) -> int:
         print("Add --yes to send them.")
         return 2
     measured = live.run(rows, k, options, a.model)
-    forecast = simulate(rows, k, ["off"] + options, a.min_tokens)
+    forecast = simulate(rows, k, ["off"] + options, a.min_tokens, a.model)
     print(f"\n{'Application':<34} {'Option':<36} {'Forecast':>9} {'Measured':>9} {'Read':>6}")
     for app, per in measured.items():
         base = per["off"].total
@@ -157,10 +157,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--version", action="version", version=__version__)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    def common(p, learn=True):
+    def common(p, learn=True, model=True):
         p.add_argument("logs", nargs="+", help="JSONL request log(s)")
-        p.add_argument("--min-tokens", type=int, default=1024,
-                       help="minimum cacheable prompt length for your model (default 1024)")
+        p.add_argument("--min-tokens", type=int, default=None,
+                       help="minimum cacheable prompt length; default: looked up from the model")
+        if model:
+            p.add_argument("--model", default=None,
+                           help="model id, used to look up the minimum when the log does not name one")
         if learn:
             p.add_argument("--learn-from", metavar="LOG",
                            help="learn the plan from this other log (out-of-sample forecast)")
@@ -173,13 +176,13 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(fn=cmd_report)
 
     p = sub.add_parser("diagnose", help="where and why the reusable prefix breaks")
-    common(p, learn=False)
+    common(p, learn=False, model=False)
     p.add_argument("-v", "--verbose", action="store_true", help="list every break")
     p.add_argument("--no-content", action="store_true")
     p.set_defaults(fn=cmd_diagnose)
 
     p = sub.add_parser("verify", help="replay under the recommended options against the live API")
-    common(p)
+    common(p, model=False)
     p.add_argument("--model", required=True)
     p.add_argument("--options", help="comma-separated option keys: " + ",".join(o for o in OPTIONS if o != "off"))
     p.add_argument("--limit", type=int)

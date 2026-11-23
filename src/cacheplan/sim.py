@@ -13,6 +13,7 @@ import hashlib
 from dataclasses import dataclass
 
 from .messages import ONE_HOUR, est_tokens, prefix_blocks
+from .models import TOOL_USE_OVERHEAD
 
 LOOKBACK = 20
 WRITE_5M, WRITE_1H, READ = 1.25, 2.0, 0.10        # price multipliers on ordinary input tokens
@@ -47,15 +48,17 @@ class CacheSim:
         self.min_tokens = min_tokens
         self.entries: dict[bytes, tuple[float, int]] = {}     # prefix hash -> (expiry, lifetime)
 
-    def request(self, req: dict, now: float) -> Usage:
+    def request(self, req: dict, now: float, min_tokens: int | None = None) -> Usage:
+        floor = self.min_tokens if min_tokens is None else min_tokens
         blocks = prefix_blocks(req)
-        h, hashes, cum, total = b"", [], [], 0
+        h, hashes, cum = b"", [], []
+        total = TOOL_USE_OVERHEAD if req.get("tools") else 0     # hidden tool-use instructions
         for text, _ in blocks:
             h = hashlib.blake2b(h + text.encode(), digest_size=12).digest()
             total += est_tokens(text)
             hashes.append(h)
             cum.append(total)
-        bps = [(i, ttl) for i, (_, ttl) in enumerate(blocks) if ttl and cum[i] >= self.min_tokens]
+        bps = [(i, ttl) for i, (_, ttl) in enumerate(blocks) if ttl and cum[i] >= floor]
         if not bps:
             return Usage(input_tokens=total)
         read = -1

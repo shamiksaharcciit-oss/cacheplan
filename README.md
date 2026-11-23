@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/shamiksaharcciit-oss/cacheplan/main/docs/img/results.svg" alt="Input cost with caching relative to no caching: LangChain ReAct template 125% automatic, 51% with cacheplan; Aider 125% automatic, 66% with cacheplan; Claude Code 27% either way" width="800">
+  <img src="https://raw.githubusercontent.com/shamiksaharcciit-oss/cacheplan/main/docs/img/results.svg" alt="Input cost with caching relative to no caching: LangGraph ReAct template 125% automatic, 51% with cacheplan; Aider 125% automatic, 66% with cacheplan; Claude Code 27% either way" width="800">
 </p>
 
 Prompt caching can cut your input bill by more than half. It can also **raise it by 25%**,
@@ -42,6 +42,7 @@ live check. **Status: early alpha, Anthropic Messages API only.**
 - [Commands](#commands)
 - [Rules](#rules)
 - [Use it in CI](#use-it-in-ci)
+- [Benchmark: six agent starters](#benchmark-six-agent-starters)
 - [How accurate is the forecast?](#how-accurate-is-the-forecast)
 - [Limits](#limits)
 - [Related tools](#related-tools)
@@ -121,7 +122,7 @@ first change falls decides everything.
 
 ## Reading the report
 
-Real output for LangChain's ReAct agent template, abridged:
+Real output for the LangGraph ReAct agent template, abridged:
 
 ```
 react-template
@@ -175,7 +176,8 @@ Useful options:
 
 - `--learn-from OTHER.jsonl` learns the breakpoint plan from one log and scores another, so
   the forecast is out of sample.
-- `--min-tokens N` sets the minimum cacheable prompt length for your model (default 1,024).
+- `--model ID` or `--min-tokens N` sets the minimum cacheable prompt length when the log does
+  not name the model. Otherwise it is looked up per request.
 - `--fail-on CP001,CP002` makes `report` exit with status 1 when those findings appear.
 
 **Log formats.** One JSON object per line, and formats can be mixed in one file: a
@@ -209,18 +211,46 @@ Record a short session in your test suite, then guard against changes that break
 One developer adding a timestamp to the system prompt can silently undo a cache saving.
 This catches it in the pull request.
 
+## Benchmark: six agent starters
+
+The same three conversations through each framework's default agent, measured on the live
+Anthropic API on 23 November 2026. Input cost is relative to the same requests without
+caching. Scripts and method: [`benchmarks/frameworks`](benchmarks/frameworks).
+
+| Framework | Version | As shipped | Automatic caching | Best option measured | Finding |
+| --- | --- | --- | --- | --- | --- |
+| smolagents `ToolCallingAgent` | 1.26.0 | 100% (caching off) | 40% | 36% planned breakpoints | Caching off |
+| Anthropic SDK tool loop | 2.13.0 | 100% (caching off) | 46% | 46% automatic | Caching off |
+| LangChain `create_agent` | 1.5.2 | 100% (caching off) | 46% | 46% automatic | Caching off |
+| Pydantic AI `Agent` | 2.71.0 | 100% (caching off) | 48% | 48% automatic | Caching off |
+| CrewAI `Agent` | 1.15.44 | 90% (caches by default) | 99% | 90% as shipped | Short prompts |
+| LangGraph ReAct template | langgraph 1.2.24 | 100% (caching off) | 124% | 51% after moving the timestamp | Timestamp in the system prompt ([issue](https://github.com/langchain-ai/react-agent/issues/123)) |
+
+Five of the six ship with caching off. For four of them, switching it on roughly halves the
+input bill. For one it raises the bill, and `cacheplan` says why.
+
 ## How accurate is the forecast?
 
-Every forecast below was checked with `cacheplan verify` against the live API on
-23 November 2026 (one model, short sessions).
+Forecasts checked with `cacheplan verify` against the live API (one model, short sessions):
 
 | Application | Option | Forecast | Measured |
 | --- | --- | --- | --- |
-| LangChain ReAct agent template | Automatic caching, 5-minute | 125% | 125% |
-| LangChain ReAct agent template | Prompt fix + breakpoints, 5-minute | 52% | 51% |
+| LangGraph ReAct template | Automatic caching, 5-minute | 125% | 124% |
+| LangGraph ReAct template | Prompt fix + breakpoints, 5-minute | 53% | 51% |
+| Anthropic SDK tool loop | Automatic caching, 5-minute | 45% | 46% |
+| LangChain `create_agent` | Automatic caching, 5-minute | 45% | 46% |
+| Pydantic AI `Agent` | Automatic caching, 5-minute | 48% | 48% |
+| smolagents `ToolCallingAgent` | Planned breakpoints, 5-minute | 37% | 36% |
 | Aider | Planned breakpoints, 5-minute | 63% | 62% |
 | Aider | Planned breakpoints, 1-hour | 91% | 90% |
 | Aider | Aider's own caching (`--cache-prompts`) | 65% | 64% |
+| CrewAI `Agent` | CrewAI's own caching | 100% | 90% |
+| CrewAI `Agent` | Automatic caching, 5-minute | 111% | 99% |
+
+Nine of the eleven are within two points. The CrewAI rows are the miss, made by version
+0.1.0a1: its prompts are short, and the forecast wrongly predicted they were below the
+minimum cacheable length. Token counts are estimated from characters, so prompts near the
+minimum remain the least reliable case, and the report now warns when that applies.
 
 For Aider, the breakpoint plan was learned from one session and scored on a different one,
 and it matched Aider's hand-tuned caching. Claude Code was at its ceiling already (27%,
@@ -228,10 +258,13 @@ local model only), and `cacheplan` correctly recommended changing nothing.
 
 ## Limits
 
-- **Small evidence base.** Three applications, one or two short sessions each, one model.
+- **Small evidence base.** Eight applications, one or two short sessions each, one model.
 - **The forecast is a model.** It follows the documented caching rules and estimates tokens
-  at three characters each. Run `verify` before acting on a close call.
-- **Minimum cacheable length varies by model.** Set `--min-tokens` for yours.
+  from character counts (3.5 characters per token, plus the tool-use instructions the API
+  adds). Run `verify` before acting on a close call.
+- **Minimum cacheable length varies by model.** It is looked up from the model in your log; set
+  `--model` or `--min-tokens` if the log does not name one. Forecasts for prompts close to the
+  minimum are rough.
 - **The prompt fix changes what the model reads.** It never drops content, but its effect on
   answer quality is not measured. Implement and test it yourself.
 - **Plans are learned from the log you give it.** A short or unrepresentative log gives a
