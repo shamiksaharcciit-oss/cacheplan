@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 330" width="800" height="330" role="img" aria-label="Input cost with caching relative to no caching, for three applications">
+<title>Input cost with caching relative to no caching, for three applications</title>
+<style>
+  .bg { fill: #fcfcfb; stroke: #e3e2dd; }
+  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; fill: #0b0b0b; }
+  .sec { fill: #52514e; }
+  .grid { stroke: #e3e2dd; }
+  .ref { stroke: #8a8983; }
+  .s1 { fill: #2a78d6; }
+  .s2 { fill: #eb6834; }
+  .muted { fill: #d9d8d2; }
+  .box { fill: #ffffff; stroke: #c9c8c1; }
+  .line { stroke: #6f6e69; fill: none; }
+  .head { fill: #6f6e69; }
+  .oninv { fill: #ffffff; }
+  @media (prefers-color-scheme: dark) {
+    .bg { fill: #1a1a19; stroke: #3a3a37; }
+    text { fill: #f0efec; }
+    .sec { fill: #c3c2b7; }
+    .grid { stroke: #3a3a37; }
+    .ref { stroke: #8f8e86; }
+    .s1 { fill: #3987e5; }
+    .s2 { fill: #d95926; }
+    .muted { fill: #45443f; }
+    .box { fill: #242422; stroke: #55544e; }
+    .line { stroke: #a3a29a; }
+    .head { fill: #a3a29a; }
+    .oninv { fill: #ffffff; }
+  }
+</style>
+<rect class="bg" x="0.5" y="0.5" width="799" height="329" rx="10"/>
+<text x="24" y="34" font-size="16" font-weight="600">Input cost with caching, relative to no caching</text>
+<text class="sec" x="24" y="54" font-size="12.5">Lower is better. 100% = the same prompts sent without caching.</text>
+<rect class="s2" x="250" y="68" width="12" height="12" rx="2"/><text class="sec" x="268" y="78.5" font-size="12.5">Automatic caching</text>
+<rect class="s1" x="400" y="68" width="12" height="12" rx="2"/><text class="sec" x="418" y="78.5" font-size="12.5">What cacheplan recommends</text>
+<line class="grid" x1="250.0" y1="96" x2="250.0" y2="284" stroke-width="1"/>
+<text class="sec" x="250.0" y="302" font-size="11.5" text-anchor="middle">0%</text>
+<line class="grid" x1="332.6923076923077" y1="96" x2="332.6923076923077" y2="284" stroke-width="1"/>
+<text class="sec" x="332.6923076923077" y="302" font-size="11.5" text-anchor="middle">25%</text>
+<line class="grid" x1="415.38461538461536" y1="96" x2="415.38461538461536" y2="284" stroke-width="1"/>
+<text class="sec" x="415.38461538461536" y="302" font-size="11.5" text-anchor="middle">50%</text>
+<line class="grid" x1="498.0769230769231" y1="96" x2="498.0769230769231" y2="284" stroke-width="1"/>
+<text class="sec" x="498.0769230769231" y="302" font-size="11.5" text-anchor="middle">75%</text>
+<line class="ref" x1="580.7692307692307" y1="96" x2="580.7692307692307" y2="284" stroke-width="1" stroke-dasharray="4 3"/>
+<text class="sec" x="580.7692307692307" y="302" font-size="11.5" text-anchor="middle">100%</text>
+<line class="grid" x1="663.4615384615385" y1="96" x2="663.4615384615385" y2="284" stroke-width="1"/>
+<text class="sec" x="663.4615384615385" y="302" font-size="11.5" text-anchor="middle">125%</text>
+<text class="sec" x="585.7692307692307" y="92" font-size="11.5" text-anchor="start">no caching</text>
+<text x="236" y="119" font-size="13.5" font-weight="600" text-anchor="end">LangChain ReAct template</text>
+<text class="sec" x="236" y="136" font-size="11.5" text-anchor="end">timestamp in the system prompt</text>
+<path class="s2" d="M250,104 h409.46153846153845 a4,4 0 0 1 4,4 v10 a4,4 0 0 1 -4,4 h-409.46153846153845 z"/>
+<text x="670.4615384615385" y="117.5" font-size="12.5" font-weight="600">125%</text>
+<path class="s1" d="M250,124 h164.69230769230768 a4,4 0 0 1 4,4 v10 a4,4 0 0 1 -4,4 h-164.69230769230768 z"/>
+<text x="425.6923076923077" y="137.5" font-size="12.5"><tspan font-weight="600">51%</tspan><tspan class="sec">  prompt fix</tspan></text>
+<text x="236" y="187" font-size="13.5" font-weight="600" text-anchor="end">Aider</text>
+<text class="sec" x="236" y="204" font-size="11.5" text-anchor="end">turns inserted mid-prompt</text>
+<path class="s2" d="M250,172 h409.46153846153845 a4,4 0 0 1 4,4 v10 a4,4 0 0 1 -4,4 h-409.46153846153845 z"/>
+<text x="670.4615384615385" y="185.5" font-size="12.5" font-weight="600">125%</text>
+<path class="s1" d="M250,192 h214.30769230769232 a4,4 0 0 1 4,4 v10 a4,4 0 0 1 -4,4 h-214.30769230769232 z"/>
+<text x="475.3076923076923" y="205.5" font-size="12.5"><tspan font-weight="600">66%</tspan><tspan class="sec">  breakpoints</tspan></text>
+<text x="236" y="255" font-size="13.5" font-weight="600" text-anchor="end">Claude Code</text>
+<text class="sec" x="236" y="272" font-size="11.5" text-anchor="end">append-only conversation</text>
+<path class="s2" d="M250,240 h85.30769230769232 a4,4 0 0 1 4,4 v10 a4,4 0 0 1 -4,4 h-85.30769230769232 z"/>
+<text x="346.3076923076923" y="253.5" font-size="12.5" font-weight="600">27%</text>
+<path class="s1" d="M250,260 h85.30769230769232 a4,4 0 0 1 4,4 v10 a4,4 0 0 1 -4,4 h-85.30769230769232 z"/>
+<text x="346.3076923076923" y="273.5" font-size="12.5"><tspan font-weight="600">27%</tspan><tspan class="sec">  nothing to change</tspan></text>
+</svg>

@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 250" width="800" height="250" role="img" aria-label="How cacheplan works: application, request log, report, optional live verification">
+<title>How cacheplan works: application, request log, report, optional live verification</title>
+<style>
+  .bg { fill: #fcfcfb; stroke: #e3e2dd; }
+  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; fill: #0b0b0b; }
+  .sec { fill: #52514e; }
+  .grid { stroke: #e3e2dd; }
+  .ref { stroke: #8a8983; }
+  .s1 { fill: #2a78d6; }
+  .s2 { fill: #eb6834; }
+  .muted { fill: #d9d8d2; }
+  .box { fill: #ffffff; stroke: #c9c8c1; }
+  .line { stroke: #6f6e69; fill: none; }
+  .head { fill: #6f6e69; }
+  .oninv { fill: #ffffff; }
+  @media (prefers-color-scheme: dark) {
+    .bg { fill: #1a1a19; stroke: #3a3a37; }
+    text { fill: #f0efec; }
+    .sec { fill: #c3c2b7; }
+    .grid { stroke: #3a3a37; }
+    .ref { stroke: #8f8e86; }
+    .s1 { fill: #3987e5; }
+    .s2 { fill: #d95926; }
+    .muted { fill: #45443f; }
+    .box { fill: #242422; stroke: #55544e; }
+    .line { stroke: #a3a29a; }
+    .head { fill: #a3a29a; }
+    .oninv { fill: #ffffff; }
+  }
+</style>
+<rect class="bg" x="0.5" y="0.5" width="799" height="249" rx="10"/>
+<text x="24" y="34" font-size="16" font-weight="600">How it works</text>
+<text class="sec" x="24" y="54" font-size="12.5">Everything runs on your machine. Only the optional last step calls the API.</text>
+<rect class="box" x="24" y="84" width="150" height="120" rx="8" stroke-width="1.2"/>
+<text x="99.0" y="110" font-size="13.5" font-weight="600" text-anchor="middle">Your application</text>
+<text class="sec" x="99.0" y="131" font-size="11.5" text-anchor="middle">sends requests</text>
+<text class="sec" x="99.0" y="148" font-size="11.5" text-anchor="middle">as usual</text>
+<rect class="box" x="204" y="84" width="160" height="120" rx="8" stroke-width="1.2"/>
+<text x="284.0" y="110" font-size="13.5" font-weight="600" text-anchor="middle">Request log</text>
+<text class="sec" x="284.0" y="131" font-size="11.5" text-anchor="middle">cacheplan capture,</text>
+<text class="sec" x="284.0" y="148" font-size="11.5" text-anchor="middle">raw request bodies or</text>
+<text class="sec" x="284.0" y="165" font-size="11.5" text-anchor="middle">promptcachelint traces</text>
+<rect class="box" x="394" y="84" width="210" height="120" rx="8" stroke-width="1.2"/>
+<rect class="s1" x="394" y="84" width="5" height="120" rx="2"/>
+<text x="499.0" y="110" font-size="13.5" font-weight="600" text-anchor="middle">cacheplan report</text>
+<text class="sec" x="499.0" y="131" font-size="11.5" text-anchor="middle">1  diagnose prefix breaks</text>
+<text class="sec" x="499.0" y="148" font-size="11.5" text-anchor="middle">2  forecast every option</text>
+<text class="sec" x="499.0" y="165" font-size="11.5" text-anchor="middle">3  recommend and plan</text>
+<rect class="box" x="634" y="84" width="142" height="120" rx="8" stroke-width="1.2"/>
+<text x="705.0" y="110" font-size="13.5" font-weight="600" text-anchor="middle">cacheplan verify</text>
+<text class="sec" x="705.0" y="131" font-size="11.5" text-anchor="middle">optional: replay live,</text>
+<text class="sec" x="705.0" y="148" font-size="11.5" text-anchor="middle">1 output token each,</text>
+<text class="sec" x="705.0" y="165" font-size="11.5" text-anchor="middle">forecast vs measured</text>
+<line class="line" x1="174" y1="144" x2="197" y2="144" stroke-width="1.5"/><path class="head" d="M204,144 l-9,-5 v10 z"/>
+<line class="line" x1="364" y1="144" x2="387" y2="144" stroke-width="1.5"/><path class="head" d="M394,144 l-9,-5 v10 z"/>
+<line class="line" x1="604" y1="144" x2="627" y2="144" stroke-width="1.5"/><path class="head" d="M634,144 l-9,-5 v10 z"/>
+<text class="sec" x="499" y="228" font-size="11.5" text-anchor="middle">no API key, no dependencies</text>
+<text class="sec" x="705" y="228" font-size="11.5" text-anchor="middle">needs your API key</text>
+</svg>
