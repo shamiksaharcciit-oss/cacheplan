@@ -2,7 +2,8 @@
 
 Anthropic, OpenAI and Gemini SDKs: wrap the client's HTTP transport. Every model call is
 appended to a JSONL file that `cacheplan report` reads: the request body and the token
-usage from the response. Headers and response text are never written.
+usage from the response. Headers and response text are never written. The log does hold
+everything sent to the model; pass no_content=True to scramble prompt text as it is written.
 
     import anthropic, httpx
     from cacheplan.record import RecordingTransport
@@ -29,7 +30,7 @@ import json
 import threading
 import time
 
-from .proxy import MAX_KEEP, classify, entry, usage_from_response
+from .proxy import MAX_KEEP, classify, entry, new_salt, scramble, usage_from_response
 
 try:
     import httpx
@@ -52,23 +53,24 @@ def _append(path: str, row: dict) -> None:
         f.write(json.dumps(row, default=str) + "\n")
 
 
-def _write(path: str, app: str, started: float, request, status: int, kept: bytes, ctype: str, kind) -> None:
+def _write(path: str, app: str, started: float, request, status: int, kept: bytes, ctype: str, kind, salt=None) -> None:
     try:
         body = json.loads(request.content)
     except ValueError:
         return
     if isinstance(body, dict):
         usage = usage_from_response(kept, ctype) if status == 200 else None
-        _append(path, entry(app, started, status, usage, body, *kind))
+        _append(path, entry(app, started, status, usage, scramble(body, salt) if salt else body, *kind))
 
 
-def record_bedrock(client, path: str, app: str = "app"):
+def record_bedrock(client, path: str, app: str = "app", no_content: bool = False):
     """Record a boto3 bedrock-runtime client's Converse and ConverseStream calls. Returns the
     same client. Bodies sent with InvokeModel are not recorded."""
     pending = threading.local()
+    salt = new_salt() if no_content else None
 
     def before(params, **_):
-        pending.value = (time.time(), {k: v for k, v in params.items()})
+        pending.value = (time.time(), scramble(dict(params), salt) if salt else dict(params))
 
     def after(parsed, **_):
         started, params = getattr(pending, "value", (time.time(), {}))
@@ -133,7 +135,8 @@ def _plain(request) -> None:
 
 
 class RecordingTransport(_Base):
-    def __init__(self, path: str, app: str = "app", inner=None):
+    def __init__(self, path: str, app: str = "app", inner=None, no_content: bool = False):
+        self.salt = new_salt() if no_content else None
         self.path, self.app, self.inner = path, app, inner or httpx.HTTPTransport()
 
     def handle_request(self, request):
@@ -144,7 +147,7 @@ class RecordingTransport(_Base):
         started = time.time()
         resp = self.inner.handle_request(request)
         ctype = resp.headers.get("content-type", "")
-        done = lambda kept: _write(self.path, self.app, started, request, resp.status_code, kept, ctype, kind)
+        done = lambda kept: _write(self.path, self.app, started, request, resp.status_code, kept, ctype, kind, self.salt)
         return httpx.Response(resp.status_code, headers=resp.headers, stream=_Tee(resp.stream, done),
                               extensions=resp.extensions)
 
@@ -153,7 +156,8 @@ class RecordingTransport(_Base):
 
 
 class AsyncRecordingTransport(_AsyncBase):
-    def __init__(self, path: str, app: str = "app", inner=None):
+    def __init__(self, path: str, app: str = "app", inner=None, no_content: bool = False):
+        self.salt = new_salt() if no_content else None
         self.path, self.app, self.inner = path, app, inner or httpx.AsyncHTTPTransport()
 
     async def handle_async_request(self, request):
@@ -164,7 +168,7 @@ class AsyncRecordingTransport(_AsyncBase):
         started = time.time()
         resp = await self.inner.handle_async_request(request)
         ctype = resp.headers.get("content-type", "")
-        done = lambda kept: _write(self.path, self.app, started, request, resp.status_code, kept, ctype, kind)
+        done = lambda kept: _write(self.path, self.app, started, request, resp.status_code, kept, ctype, kind, self.salt)
         return httpx.Response(resp.status_code, headers=resp.headers, stream=_AsyncTee(resp.stream, done),
                               extensions=resp.extensions)
 

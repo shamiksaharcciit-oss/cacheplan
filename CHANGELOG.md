@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `capture --no-content` (and `no_content=True` on the recorders) scrambles prompt text as it
+  is written. Reports still work on such a log.
+- `capture` now says at start-up that the log holds everything sent to the model.
+
 ## 0.3.0a1
 
 - **OpenAI, Bedrock and Gemini logs.** Chat Completions, Responses, Converse and

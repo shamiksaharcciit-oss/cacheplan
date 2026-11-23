@@ -11,8 +11,10 @@ cacheplan.record.record_bedrock instead.
 """
 from __future__ import annotations
 
+import hashlib
 import http.client
 import json
+import os
 import re
 import threading
 import time
@@ -83,6 +85,32 @@ def usage_from_response(body: bytes, content_type: str) -> dict | None:
         return None
 
 
+_KEEP = {"role", "type", "model", "modelId", "ttl", "mode", "anthropic_version", "prompt_cache_retention"}
+_WORD = re.compile(r"[^\W_]+")
+
+
+def new_salt() -> bytes:
+    """A random key for one capture. It is never written, so the scrambling cannot be undone."""
+    return os.urandom(16)
+
+
+def scramble(value, salt: bytes, key: str = ""):
+    """A copy of a request body with every word of text replaced by scrambled characters of
+    the same length. Structure, lengths, spacing and punctuation are kept, and the same word
+    always scrambles to the same characters within one capture, so cacheplan can still see
+    what repeats and what changes. Words of one or two characters can collide."""
+    if isinstance(value, dict):
+        return {k: scramble(v, salt, k) for k, v in value.items()}
+    if isinstance(value, list):
+        return [scramble(v, salt, key) for v in value]
+    if isinstance(value, str) and key not in _KEEP:
+        def word(m):
+            digest = hashlib.blake2b(m.group().encode(), key=salt).hexdigest()
+            return (digest * (len(m.group()) // len(digest) + 1))[:len(m.group())]
+        return _WORD.sub(word, value)
+    return value
+
+
 def entry(app: str, started: float, status: int, usage: dict | None, req: dict,
           provider: str, model: str | None = None) -> dict:
     """One log line. Provider and model are written only when the request does not show them."""
@@ -94,7 +122,8 @@ def entry(app: str, started: float, status: int, usage: dict | None, req: dict,
     return row
 
 
-def make_handler(upstream: str, out_path: str, app: str):
+def make_handler(upstream: str, out_path: str, app: str, no_content: bool = False):
+    salt = new_salt()
     up = urlsplit(upstream)
     lock, counter = threading.Lock(), [0]
 
@@ -149,7 +178,7 @@ def make_handler(upstream: str, out_path: str, app: str):
                 usage = usage_from_response(kept, ctype) if status == 200 else None
                 with lock:
                     counter[0] += 1
-                    row = entry(app, started, status, usage, req, *kind)
+                    row = entry(app, started, status, usage, scramble(req, salt) if no_content else req, *kind)
                     row = {"id": f"{app}-{counter[0]}", **row}
                     with open(out_path, "a", encoding="utf-8") as f:
                         f.write(json.dumps(row) + "\n")
@@ -158,5 +187,5 @@ def make_handler(upstream: str, out_path: str, app: str):
     return Handler
 
 
-def serve(port: int, upstream: str, out: str, app: str) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer(("127.0.0.1", port), make_handler(upstream, out, app))
+def serve(port: int, upstream: str, out: str, app: str, no_content: bool = False) -> ThreadingHTTPServer:
+    return ThreadingHTTPServer(("127.0.0.1", port), make_handler(upstream, out, app, no_content))

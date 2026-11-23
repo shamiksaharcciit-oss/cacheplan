@@ -211,9 +211,13 @@ def cmd_capture(a) -> int:
     upstream = a.upstream or UPSTREAMS[a.provider]
     print(f"Capturing on http://127.0.0.1:{a.port} -> {upstream}; writing {a.out}.\n"
           f"In the shell that runs your application set {BASE_URL_HINT[a.provider].format(port=a.port)}\n"
-          "Ctrl+C to stop.")
+          "Ctrl+C to stop.\n"
+          + ("Prompt text is scrambled before it is written; the log keeps structure and lengths only."
+             if a.no_content else
+             "The log will hold everything your application sends to the model. Check it before sharing, "
+             "or capture with --no-content."))
     try:
-        serve(a.port, upstream, a.out, a.app).serve_forever()
+        serve(a.port, upstream, a.out, a.app, a.no_content).serve_forever()
     except KeyboardInterrupt:
         print("\nstopped")
     return 0
@@ -298,6 +302,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--port", type=int, default=8787)
     p.add_argument("--provider", choices=["anthropic", "openai", "gemini", "bedrock"], default="anthropic")
     p.add_argument("--upstream", default=None, help="override the provider's API address")
+    p.add_argument("--no-content", action="store_true",
+                   help="scramble prompt text before writing it; reports still work, without readable examples")
     p.set_defaults(fn=cmd_capture)
 
     sub.add_parser("rules", help="list rule ids").set_defaults(fn=cmd_rules)

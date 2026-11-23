@@ -17,6 +17,8 @@
   <img src="https://raw.githubusercontent.com/shamiksaharcciit-oss/cacheplan/main/docs/img/results.svg" alt="Input cost with caching relative to no caching: LangGraph ReAct template 125% automatic, 51% with cacheplan; Aider 125% automatic, 66% with cacheplan; Claude Code 27% either way" width="800">
 </p>
 
+<p align="center"><sub>LangGraph ReAct template: from the <a href="#benchmark-six-agent-starters">benchmark</a> below. Aider and Claude Code: separate captures of real coding sessions, described under <a href="#how-accurate-is-the-forecast">How accurate is the forecast?</a> Claude Code's figure is a local forecast, not measured.</sub></p>
+
 Prompt caching can cut your input bill by more than half. It can also **raise it by 25%**,
 because every cache write costs extra and is wasted if nothing reads it back. Which one you
 get depends on how your application assembles its prompts and how quickly requests arrive,
@@ -76,8 +78,15 @@ export ANTHROPIC_BASE_URL=http://127.0.0.1:8787
 $env:ANTHROPIC_BASE_URL = "http://127.0.0.1:8787"
 ```
 
-The proxy writes request bodies only. Headers never reach the file, so your API key stays
-out of it.
+The proxy writes request bodies and token counts. Headers never reach the file, so your API
+key stays out of it.
+
+> **The log holds everything your application sends to the model:** system prompts, user
+> messages, tool definitions, file contents. Check it before you share or commit it. To
+> keep prompt text out of the file altogether, capture with `--no-content`: every word is
+> replaced by scrambled characters of the same length, using a key that is never stored.
+> Reports still work on such a log, with the same costs and findings but no readable
+> examples, and it cannot be replayed with `verify` or `quality`.
 
 **3. Get the verdict**
 
@@ -174,7 +183,7 @@ react-template
 | `cacheplan check LOG --min-reusable 0.5` | Fail a pipeline when too little of the prompt is reusable |
 | `cacheplan quality LOG --model M --yes` | Check whether the prompt fix changes the model's answers, against a control |
 | `cacheplan baseline LOG --save FILE` / `--compare FILE` | Save a content-free summary and fail later runs that are worse |
-| `cacheplan capture --out LOG` | Record requests and their token usage through a local proxy. `--provider openai` or `gemini` for those APIs |
+| `cacheplan capture --out LOG` | Record requests and their token usage through a local proxy. `--provider openai` or `gemini` for those APIs; `--no-content` scrambles prompt text |
 | `cacheplan rules` | List rule ids |
 
 Useful options:
@@ -217,7 +226,8 @@ client = anthropic.Anthropic(http_client=anthropic.DefaultHttpxClient(
 ```
 
 Use `AsyncRecordingTransport` with `anthropic.DefaultAsyncHttpxClient` for the async client.
-Headers and response text are never written. The same transport works for the OpenAI SDK
+Headers and response text are never written; pass `no_content=True` to scramble prompt text
+too. The same transport works for the OpenAI SDK
 (`openai.OpenAI(http_client=openai.DefaultHttpxClient(transport=...))`). For Bedrock:
 
 ```python
@@ -294,7 +304,7 @@ As a GitHub Action:
 - uses: actions/setup-python@v7
   with:
     python-version: "3.12"
-- uses: shamiksaharcciit-oss/cacheplan@main
+- uses: shamiksaharcciit-oss/cacheplan@v0.3.0a1
   with:
     log: captures/session.jsonl
     min-reusable: "0.5"
@@ -305,7 +315,7 @@ As a GitHub Action:
 The report is added to the job summary without prompt text. Or call the commands directly:
 
 ```yaml
-- run: pip install --pre cacheplan
+- run: pip install cacheplan==0.3.0a1
 - run: cacheplan check captures/session.jsonl --min-reusable 0.5
 - run: cacheplan baseline captures/session.jsonl --compare captures/baseline.json
 ```
