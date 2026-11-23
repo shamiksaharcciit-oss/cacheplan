@@ -31,7 +31,8 @@ and neither shows up as an error.
 | **What should I do?** | One recommendation with instructions, and a live check that compares the forecast with the real API |
 
 It runs on your machine, has no dependencies, and needs no API key except for the optional
-live check. **Status: early alpha, Anthropic Messages API only.**
+live check. **Status: early alpha.** The Anthropic API is checked against live traffic; OpenAI,
+Bedrock and Gemini logs are read too, with [limits](#providers).
 
 ## Contents
 
@@ -40,6 +41,7 @@ live check. **Status: early alpha, Anthropic Messages API only.**
 - [Why layout matters](#why-layout-matters)
 - [Reading the report](#reading-the-report)
 - [Commands](#commands)
+- [Providers](#providers)
 - [Rules](#rules)
 - [Use it in CI](#use-it-in-ci)
 - [Benchmark: six agent starters](#benchmark-six-agent-starters)
@@ -172,7 +174,7 @@ react-template
 | `cacheplan check LOG --min-reusable 0.5` | Fail a pipeline when too little of the prompt is reusable |
 | `cacheplan quality LOG --model M --yes` | Check whether the prompt fix changes the model's answers, against a control |
 | `cacheplan baseline LOG --save FILE` / `--compare FILE` | Save a content-free summary and fail later runs that are worse |
-| `cacheplan capture --out LOG` | Record requests and their token usage through a local proxy |
+| `cacheplan capture --out LOG` | Record requests and their token usage through a local proxy. `--provider openai` or `gemini` for those APIs |
 | `cacheplan rules` | List rule ids |
 
 Useful options:
@@ -186,8 +188,10 @@ Useful options:
 - `--html report.html` also writes a self-contained page you can forward.
 
 **Log formats.** One JSON object per line, and formats can be mixed in one file: a
-`cacheplan capture` line, a raw Anthropic request body, or a
-[promptcachelint](https://github.com/OsmnvAslan/promptcachelint) trace record.
+`cacheplan capture` line, a raw request body (Anthropic Messages, OpenAI Chat Completions or
+Responses, Bedrock Converse, Gemini generateContent), or a
+[promptcachelint](https://github.com/OsmnvAslan/promptcachelint) trace record. The provider
+is detected per line.
 
 ### Real token counts
 
@@ -213,7 +217,47 @@ client = anthropic.Anthropic(http_client=anthropic.DefaultHttpxClient(
 ```
 
 Use `AsyncRecordingTransport` with `anthropic.DefaultAsyncHttpxClient` for the async client.
-Headers and response text are never written.
+Headers and response text are never written. The same transport works for the OpenAI SDK
+(`openai.OpenAI(http_client=openai.DefaultHttpxClient(transport=...))`). For Bedrock:
+
+```python
+import boto3
+from cacheplan.record import record_bedrock
+
+client = record_bedrock(boto3.client("bedrock-runtime"), "requests.jsonl", app="my-app")
+```
+
+## Providers
+
+Every request is converted to one internal shape, so diagnosis and findings work the same
+everywhere. What differs is how much of the forecast each provider's documentation supports.
+
+| Provider | Diagnosis and findings | Cost forecast | Options compared | Checked against the live API |
+| --- | :---: | :---: | --- | :---: |
+| Anthropic API | Yes | Yes | Off, automatic, planned breakpoints, prompt fix; 5-minute and 1-hour | Yes |
+| Bedrock, Claude models (Converse, InvokeModel) | Yes | Yes | Same as Anthropic, as `cachePoint` blocks; Bedrock's own minimums | No |
+| Bedrock, Nova | Yes | Yes, set `--price` | Off, planned breakpoints; 5-minute only | No |
+| OpenAI, GPT-5.6 and later | Yes | Yes | Off, automatic, planned breakpoints, prompt fix; 30-minute and 12-hour; writes at 1.25x and 2.5x | No |
+| OpenAI, GPT-5.5 and earlier | Yes | Yes | Automatic only (no write fee, nothing to switch on), prompt fix; in-memory and 24h retention | No |
+| Gemini | Yes | No | None | No |
+
+What to know before relying on the non-Anthropic rows:
+
+- **None of them has been compared with a live API by this project.** The rules were read
+  from each provider's documentation on 23 November 2026. If your log has recorded usage,
+  the report's forecast check tells you how well the model holds on your own traffic; treat
+  the forecast as unconfirmed until you have seen that line.
+- **OpenAI, GPT-5.5 and earlier:** the cache keeps any shared prefix, in fixed token steps,
+  so a changing value late in the system prompt costs less than it does on Anthropic. Cache
+  lifetimes are the typical values OpenAI documents, not guarantees, and requests are
+  assumed to reach the same cache (set `prompt_cache_key` if your traffic is high).
+- **Gemini:** its documentation does not state the cached-token discount or how long
+  implicit caches live, so there is no cost forecast. Explicit caches (`cachedContents`) are
+  not modelled.
+- **Bedrock, Claude models:** Anthropic's prices are assumed. Check your Bedrock rates and
+  pass `--price` if they differ. InvokeModel bodies do not name the model; pass `--model`.
+- `verify` and `quality` send requests to the Anthropic API only.
+- Applications from other providers are labelled, for example `my-app [openai]`.
 
 ## Rules
 
@@ -226,7 +270,7 @@ Headers and response text are never written.
 | `CP005` | A per-tenant or per-user value sits before static content | Move it behind the static instructions |
 | `CP006` | New content is inserted before content that was already sent | Use the planned breakpoints, or append new turns at the end |
 | `CP007` | Previously sent message content changes between requests | Keep earlier messages identical; send changing material late |
-| `CP008` | Many pauses are longer than the 5-minute cache lifetime | Compare the 1-hour rows |
+| `CP008` | Many pauses are longer than the short cache lifetime | Compare the long-lifetime rows |
 | `CP009` | Cache writes are rarely read back with the current settings | Follow the recommendation |
 
 ## Use it in CI
@@ -324,22 +368,22 @@ local model only), and `cacheplan` correctly recommended changing nothing.
 - **Plans are chosen by replaying the log you give it,** with its real timing, separately
   for each cache lifetime. A short or unrepresentative log gives a poor plan. Use
   `--learn-from` to test on a second log.
-- **Prices and minimums are a snapshot** of Anthropic's documentation on 23 November 2026.
+- **Prices and minimums are a snapshot** of each provider's documentation on 23 November 2026.
 - **Savings apply to input tokens only.** Output tokens are unaffected.
-- **Anthropic only** in this release.
+- **Only the Anthropic API has been checked live.** See [Providers](#providers) for what is
+  and is not forecast elsewhere.
 
 ## Related tools
 
 [promptcachelint](https://github.com/OsmnvAslan/promptcachelint) and
 [cachelint](https://github.com/Diafyx/cachelint) explain why a prompt cache missed, and both
-support OpenAI as well as Anthropic. If you only need miss diagnosis, or you use OpenAI, look
-at them first.
+support OpenAI as well as Anthropic. If you only need miss diagnosis, look at them first.
 
 | | promptcachelint | cachelint | cacheplan |
 | --- | :---: | :---: | :---: |
 | Find where the prefix breaks | Yes | Yes | Yes |
 | Flag timestamps and similar | Yes | Yes | Yes |
-| OpenAI support | Yes | Yes | Not yet |
+| OpenAI support | Yes | Yes | Yes, not yet checked live |
 | In-process SDK recording | Yes | Yes | Yes |
 | Forecast cost for each caching option | | | Yes |
 | Plan where to place breakpoints | | | Yes |
@@ -351,7 +395,7 @@ Comparison made on 23 November 2026 against promptcachelint 0.1.0 and cachelint 
 ## Roadmap
 
 - Read Langfuse, LangSmith, OpenTelemetry and LiteLLM exports
-- OpenAI, then other providers
+- Live verification for OpenAI and Bedrock; a Gemini forecast once its rules are documented
 - A wrapper that applies the plan automatically, once the quality check has more evidence
 - Longer sessions and more frameworks in the benchmark
 

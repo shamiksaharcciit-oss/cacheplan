@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.0a1
+
+- **OpenAI, Bedrock and Gemini logs.** Chat Completions, Responses, Converse and
+  generateContent requests are detected and read alongside Anthropic ones. Diagnosis and
+  findings work for all of them.
+- **Forecasts under each provider's own rules.** Bedrock Claude models use `cachePoint`
+  blocks and Bedrock's minimums. OpenAI GPT-5.6 and later use 30-minute and 12-hour
+  lifetimes with 1.25x and 2.5x writes. OpenAI GPT-5.5 and earlier are modelled as automatic
+  prefix caching with no write fee. Gemini gets diagnosis only: its documentation does not
+  state the discount or lifetime.
+- `capture --provider openai|gemini`, the recording transport for the OpenAI SDK, and
+  `record_bedrock` for boto3. Usage is read in every provider's format.
+- Not checked against a live OpenAI, Bedrock or Gemini API yet. `verify` and `quality`
+  remain Anthropic only.
+
 ## 0.2.0a1
 
 - **Real token counts.** The capture proxy now records the usage block of each response.

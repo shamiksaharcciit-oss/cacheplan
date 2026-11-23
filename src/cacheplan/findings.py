@@ -15,7 +15,7 @@ RULES = {
     "CP005": "a per-tenant or per-user value sits before static content",
     "CP006": "new content is inserted before content that was already sent",
     "CP007": "previously sent message content changes between requests",
-    "CP008": "many pauses are longer than the 5-minute cache lifetime",
+    "CP008": "many pauses are longer than the short cache lifetime",
     "CP009": "cache writes are rarely read back with the current settings",
 }
 
@@ -67,25 +67,30 @@ def findings(v: Verdict, rows: list[dict], k: Knowledge, show_content: bool = Tr
         elif g["kind"] == "inserted":
             out.append(Finding("CP006", f"new content is inserted before previously sent content "
                                f"({g['count']} times, first at {b.path})",
-                               "use the planned breakpoints above, which sit just before the insertion "
-                               "point, or append new turns at the end", g["lost_tokens"]))
+                               ("use the planned breakpoints above, which sit just before the insertion "
+                                "point, or append new turns at the end") if v.rules.mode == "breakpoints" and v.rules.forecast
+                               else "append new turns at the end and keep what was already sent in place",
+                               g["lost_tokens"]))
         elif g["kind"] == "changed" and g["where"] == "messages":
             what = f"a {g['cause']}" if g["cause"] else "content"
             out.append(Finding("CP007", f"{what} in an earlier message changes between requests "
                                f"({g['count']} times, first at {b.path}){detail}",
                                "keep earlier messages byte-identical; send changing material "
                                "(file contents, retrieved documents) as late as possible", g["lost_tokens"]))
-    if (v.recommended != "off" or v.fix_option) and \
+    if v.rules.mode == "breakpoints" and (v.recommended != "off" or v.fix_option) and \
             not any(any(ttl for _, ttl in prefix_blocks(r["request"])) for r in rows):
-        out.append(Finding("CP003", "no request sets cache_control, so nothing is cached",
+        marker = {"bedrock": "a cachePoint", "openai": "a cache breakpoint"}.get(v.rules.provider, "cache_control")
+        out.append(Finding("CP003", f"no request sets {marker}, so nothing is cached",
                            "see the recommendation above before switching it on"))
     if v.typical_tokens < v.minimum:
         out.append(Finding("CP004", f"the typical prompt is ~{v.typical_tokens:,} tokens (estimate); the minimum "
                            f"cacheable length for this model is {v.minimum:,}",
                            "nothing to do: prompts this short are not cached"))
     if v.gaps_over_5m >= 0.2:
-        out.append(Finding("CP008", f"{v.gaps_over_5m:.0%} of pauses between requests exceed 5 minutes",
-                           "compare the 1-hour rows in the forecast"))
+        short = f"{v.rules.ttl_short // 60} minutes"
+        out.append(Finding("CP008", f"{v.gaps_over_5m:.0%} of pauses between requests exceed {short}",
+                           f"compare the {v.rules.name_long} rows in the forecast" if v.rules.write_long is not None and v.rules.forecast
+                           else "nothing cached survives those pauses on this model"))
     if "logged" in v.usage:
         u = v.usage["logged"]
         if u.cache_creation_input_tokens and u.cache_read_input_tokens < 0.5 * u.cache_creation_input_tokens:

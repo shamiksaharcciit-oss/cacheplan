@@ -21,7 +21,7 @@ def _load(args) -> tuple[list[dict], Knowledge | None]:
     for why, n in log.skipped.items():
         print(f"skipped {n} line(s): {why}", file=sys.stderr)
     if not log.rows:
-        raise SystemExit("No Anthropic Messages requests found in the log.")
+        raise SystemExit("No model requests found in the log.")
     if learn_path:
         train = [r for r in log.rows if r["_src"] == 0]
         rows = [r for r in log.rows if r["_src"] > 0]
@@ -41,7 +41,9 @@ def cmd_report(a) -> int:
         print(json.dumps({"cacheplan": __version__, "applications": [as_dict(v, f) for v, f in results]}, indent=1))
     else:
         print(f"cacheplan {__version__}: {len(rows)} requests, {len(results)} application(s). "
-              "Forecasts come from a local model of Anthropic caching; confirm with `cacheplan verify`.\n")
+              "Forecasts come from a local model of each provider's caching rules"
+              + ("; confirm with `cacheplan verify`.\n" if all(v.rules.provider == "anthropic" for v in verdicts)
+                 else ". Only the Anthropic API rules have been checked against live traffic.\n"))
         shown = [(v, f) for v, f in results if v.requests >= 3 or len(results) == 1]
         print("\n\n".join(text(v, f) for v, f in shown))
         if len(shown) < len(results):
@@ -109,10 +111,24 @@ def cmd_gaps(a) -> int:
     return 0
 
 
+def _anthropic_only(rows: list[dict], command: str) -> list[dict]:
+    """Live commands send requests to the Anthropic API, so only its logs can be replayed."""
+    keep = [r for r in rows if r.get("provider", "anthropic") == "anthropic"]
+    other = sorted({r["provider"] for r in rows} - {"anthropic"})
+    if other:
+        print(f"`cacheplan {command}` sends requests to the Anthropic API only; "
+              f"leaving out {len(rows) - len(keep)} request(s) from: {', '.join(other)}.", file=sys.stderr)
+    if not keep:
+        raise SystemExit(f"Nothing to send: `cacheplan {command}` supports Anthropic API logs only. For other "
+                         "providers, capture with usage recorded and read the forecast check in `cacheplan report`.")
+    return keep
+
+
 def cmd_verify(a) -> int:
     from . import live
     from .models import spec
     rows, k = _load(a)
+    rows = _anthropic_only(rows, "verify")
     if a.limit:
         rows = rows[:a.limit]
     k = k or learn_from(rows, a.min_tokens, a.model)
@@ -148,6 +164,7 @@ def cmd_verify(a) -> int:
 def cmd_quality(a) -> int:
     from . import quality
     rows, k = _load(a)
+    rows = _anthropic_only(rows, "quality")
     k = k or learn_from(rows, a.min_tokens, None)
     print(f"Quality check: up to {a.sample} requests per application, three calls each "
           f"(as written twice, then with the prompt fix), max_tokens={a.max_tokens}. This spends output tokens.")
@@ -185,12 +202,18 @@ def cmd_baseline(a) -> int:
 
 
 def cmd_capture(a) -> int:
-    from .proxy import serve
-    print(f"Capturing on http://127.0.0.1:{a.port} -> {a.upstream}; writing {a.out}.\n"
-          f"In the shell that runs your application set ANTHROPIC_BASE_URL=http://127.0.0.1:{a.port}\n"
+    from .proxy import BASE_URL_HINT, UPSTREAMS, serve
+    if a.provider == "bedrock":
+        raise SystemExit("Bedrock requests are signed for their host and cannot go through a proxy.\n"
+                         "Record them inside your application instead:\n\n"
+                         "    from cacheplan.record import record_bedrock\n"
+                         '    client = record_bedrock(boto3.client("bedrock-runtime"), "requests.jsonl")')
+    upstream = a.upstream or UPSTREAMS[a.provider]
+    print(f"Capturing on http://127.0.0.1:{a.port} -> {upstream}; writing {a.out}.\n"
+          f"In the shell that runs your application set {BASE_URL_HINT[a.provider].format(port=a.port)}\n"
           "Ctrl+C to stop.")
     try:
-        serve(a.port, a.upstream, a.out, a.app).serve_forever()
+        serve(a.port, upstream, a.out, a.app).serve_forever()
     except KeyboardInterrupt:
         print("\nstopped")
     return 0
@@ -273,7 +296,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--out", required=True)
     p.add_argument("--app", default="app", help="label for the application being captured")
     p.add_argument("--port", type=int, default=8787)
-    p.add_argument("--upstream", default="https://api.anthropic.com")
+    p.add_argument("--provider", choices=["anthropic", "openai", "gemini", "bedrock"], default="anthropic")
+    p.add_argument("--upstream", default=None, help="override the provider's API address")
     p.set_defaults(fn=cmd_capture)
 
     sub.add_parser("rules", help="list rule ids").set_defaults(fn=cmd_rules)
