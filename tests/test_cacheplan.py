@@ -861,3 +861,13 @@ def test_capture_files_are_private_and_the_ledger_lists_evidence(tmp_path, capsy
     assert cli.main(["providers"]) == 0
     out = capsys.readouterr().out
     assert "documentation only" in out and "gpt-5.6-luna" in out and "developers.openai.com" in out
+
+
+def test_scrambling_never_makes_two_short_values_look_the_same():
+    from cacheplan.proxy import new_salt, scramble
+    for _ in range(20):
+        salt = new_salt()
+        seen = {scramble(f"{n:02d}", salt) for n in range(100)} | {scramble(f"{n:03d}", salt) for n in range(300)}
+        assert len(seen) == 400
+        assert all(len(scramble(w, salt)) == len(w) for w in ("a", "Zz", "2026", "abcdef", "abcdefg", "naïve"))
+        assert scramble("id 7 id 7", salt).split()[1] == scramble("7", salt)
