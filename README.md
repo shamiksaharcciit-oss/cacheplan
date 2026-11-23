@@ -107,7 +107,7 @@ The local model's forecast was within two points of the live measurement in ever
   `--min-tokens` for yours.
 - **The prompt fix changes what the model reads.** It never drops content, but its effect on
   answer quality is not measured. Treat it as a suggestion to implement and test yourself.
-- **The 1-hour lifetime has not been verified live** by this project yet.
+- **The 1-hour lifetime has had one live check.** The request was accepted and the read share matched the forecast; its price is taken from the documentation.
 - **Plans are learned from the log you give it.** A short or unrepresentative log gives a
   poor plan. Use `--learn-from` to test on a second log.
 - **Anthropic only.** OpenAI and others are planned.
