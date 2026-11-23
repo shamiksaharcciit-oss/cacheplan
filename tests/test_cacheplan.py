@@ -499,7 +499,7 @@ def test_quality_check_compares_actions_against_a_control(upstream, monkeypatch)
     res = quality.run(rows, learn_from(rows), "m", sample=3, progress=lambda *_: None,
                       url=f"http://127.0.0.1:{upstream.server_port}/v1/messages")
     assert len(res) == 1 and res[0].samples == 3
-    assert res[0].fix_same_action == 3 and "no difference" in res[0].verdict
+    assert res[0].fix_same_action == 3 and "inconclusive" in res[0].verdict      # three samples prove nothing
     assert len(_Upstream.seen) == 9 and _Upstream.seen[0][1]["max_tokens"] == 400
     assert quality.action({"content": [{"type": "tool_use", "name": "search", "input": {"q": 1}}]}) != \
         quality.action({"content": [{"type": "text", "text": "hi"}]})
@@ -537,3 +537,19 @@ def test_in_process_recorder_logs_request_and_usage(tmp_path):
     assert "sk-secret" not in logged and "secret answer" not in logged
     rows = load(str(out)).rows
     assert len(rows) == 1 and rows[0]["app"] == "inproc" and rows[0]["usage"]["cache_read_input_tokens"] == 5
+
+
+def test_quality_verdict_needs_the_gap_to_exceed_its_uncertainty():
+    from cacheplan.quality import Result
+    small = Result("a", samples=10, control_same_action=8, fix_same_action=7,
+                   control_similarity=[0.9, 0.2, 0.8, 0.3, 0.7, 0.4, 0.9, 0.1, 0.8, 0.6],
+                   fix_similarity=[0.5, 0.4, 0.6, 0.2, 0.3, 0.5, 0.7, 0.2, 0.4, 0.7],
+                   different=[{}], only_control_changed=0)
+    assert "inconclusive" in small.verdict
+    same = Result("b", samples=30, control_same_action=27, fix_same_action=27,
+                  control_similarity=[0.6] * 30, fix_similarity=[0.59] * 30)
+    assert same.verdict == "no difference beyond run-to-run variation"
+    worse = Result("c", samples=30, control_same_action=28, fix_same_action=20,
+                   control_similarity=[0.7] * 15 + [0.6] * 15, fix_similarity=[0.4] * 15 + [0.35] * 15,
+                   different=[{}] * 8, only_control_changed=0)
+    assert "review before adopting" in worse.verdict

@@ -156,7 +156,7 @@ def cmd_quality(a) -> int:
         return 2
     results = quality.run(rows, k, a.model, a.sample, a.max_tokens)
     print("\n" + quality.text(results))
-    return 1 if any("review" in r.verdict for r in results) else 0
+    return 1 if any("review before adopting" in r.verdict for r in results) else 0
 
 
 def cmd_baseline(a) -> int:
