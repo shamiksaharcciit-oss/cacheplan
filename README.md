@@ -33,7 +33,8 @@ and neither shows up as an error.
 | **What should I do?** | One recommendation with instructions, and a live check that compares the forecast with the real API |
 
 It runs on your machine, has no dependencies, and needs no API key except for the optional
-live check. **Status: early alpha.** The Anthropic API is checked against live traffic; OpenAI,
+live check. This page describes the `main` branch; the release on PyPI can be a step behind
+(see the [changelog](CHANGELOG.md)). **Status: early alpha.** The Anthropic API is checked against live traffic; OpenAI,
 Bedrock and Gemini logs are read too, with [limits](#providers).
 
 ## Contents
@@ -81,12 +82,13 @@ $env:ANTHROPIC_BASE_URL = "http://127.0.0.1:8787"
 The proxy writes request bodies and token counts. Headers never reach the file, so your API
 key stays out of it.
 
-> **The log holds everything your application sends to the model:** system prompts, user
+> **What the log holds: everything your application sends to the model:** system prompts, user
 > messages, tool definitions, file contents. Check it before you share or commit it. To
 > keep prompt text out of the file altogether, capture with `--no-content`: every word is
 > replaced by scrambled characters of the same length, using a key that is never stored.
 > Reports still work on such a log, with the same costs and findings but no readable
-> examples, and it cannot be replayed with `verify` or `quality`.
+> examples, and it cannot be replayed with `verify` or `quality`. New capture files are
+> created readable by their owner only (on Linux and macOS).
 
 **3. Get the verdict**
 
@@ -185,6 +187,7 @@ react-template
 | `cacheplan baseline LOG --save FILE` / `--compare FILE` | Save a content-free summary and fail later runs that are worse |
 | `cacheplan capture --out LOG` | Record requests and their token usage through a local proxy. `--provider openai` or `gemini` for those APIs; `--no-content` scrambles prompt text |
 | `cacheplan rules` | List rule ids |
+| `cacheplan providers` | Show, per provider, what is forecast, the source of its rules and the live evidence behind them |
 
 Useful options:
 
@@ -273,12 +276,17 @@ What to know before relying on the non-Anthropic rows:
   so a changing value late in the system prompt costs less than it does on Anthropic. Cache
   lifetimes are the typical values OpenAI documents, not guarantees, and requests are
   assumed to reach the same cache (set `prompt_cache_key` if your traffic is high).
+- **OpenAI, GPT-6.2 and later:** top-level `instructions` are appended after the input,
+  cannot be cached, and are billed in full on every request (OpenAI's guide). They are
+  modelled that way and reported as `CP010`. Not checked live.
 - **Gemini:** its documentation does not state the cached-token discount or how long
   implicit caches live, so there is no cost forecast. Explicit caches (`cachedContents`) are
   not modelled.
 - **Bedrock, Claude models:** Anthropic's prices are assumed. Check your Bedrock rates and
   pass `--price` if they differ. InvokeModel bodies do not name the model; pass `--model`.
 - `verify` and `quality` send requests to the Anthropic API only.
+- `cacheplan providers` prints this ledger from the same table the forecast uses, with the
+  source of each rule set and the evidence behind it.
 - Applications from other providers are labelled, for example `my-app [openai]`.
 
 ## Rules
@@ -294,6 +302,7 @@ What to know before relying on the non-Anthropic rows:
 | `CP007` | Previously sent message content changes between requests | Keep earlier messages identical; send changing material late |
 | `CP008` | Many pauses are longer than the short cache lifetime | Compare the long-lifetime rows |
 | `CP009` | Cache writes are rarely read back with the current settings | Follow the recommendation |
+| `CP010` | Top-level `instructions` are billed uncached on every request (OpenAI GPT-6.2 and later) | Send them as a developer message at the start of `input` |
 
 ## Use it in CI
 
@@ -312,7 +321,9 @@ As a GitHub Action:
     baseline: captures/baseline.json   # optional, from `cacheplan baseline --save`
 ```
 
-The report is added to the job summary without prompt text. Or call the commands directly:
+The action installs the code of the revision you pin, so the tag decides what runs (set
+`version` to use a PyPI release instead). The report is added to the job summary without
+prompt text. Or call the commands directly:
 
 ```yaml
 - run: pip install cacheplan==0.3.0a1
@@ -397,8 +408,10 @@ changing nothing.
 - **The prompt fix changes what the model reads.** It never drops content. `cacheplan quality`
   compares answers with and without it against a control, on actions taken and wording; that
   is a screen, not a full evaluation, and it has only been tested against a stand-in so far.
-- **Plans are chosen by replaying the log you give it,** with its real timing, separately
-  for each cache lifetime. A short or unrepresentative log gives a poor plan. Use
+- **"Planned breakpoints" means the best plan found in a bounded search,** not a global
+  optimum: candidates are the prompt head, the constant prefix and up to two learned
+  positions, scored on the first 300 requests of each application. Plans are chosen by
+  replaying the log you give it, with its real timing, separately for each cache lifetime. A short or unrepresentative log gives a poor plan. Use
   `--learn-from` to test on a second log.
 - **Prices and minimums are a snapshot** of each provider's documentation on 23 November 2026.
 - **Savings apply to input tokens only.** Output tokens are unaffected.

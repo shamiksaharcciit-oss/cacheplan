@@ -803,3 +803,61 @@ def test_capture_without_content_keeps_the_report_and_drops_the_text(tmp_path, c
     assert b.fix_option and b.cost(b.fix_option) == pytest.approx(a.cost(a.fix_option), abs=0.03)
     assert cli.main(["report", _write(tmp_path, "hidden.jsonl", hidden)]) == 0
     assert "CP001" in capsys.readouterr().out
+
+
+def test_instructions_on_gpt_6_2_sit_after_the_input_and_are_never_cached(tmp_path, capsys):
+    """OpenAI's guide: models starting with GPT-6.2 append top-level instructions after
+    input and bill them at the uncached rate even on a cache hit."""
+    def responses(model):
+        return [{"ts": t, "app": "bot", "request": {"model": model, "instructions": RULEBOOK,
+                 "input": [{"role": r, "content": x} for r, x in turns]}} for t, c, s, turns in _turns()]
+    assert providers.instructions_after_input("gpt-6.2-sol") and providers.instructions_after_input("gpt-7-sol")
+    assert not providers.instructions_after_input("gpt-6.1-sol") and not providers.instructions_after_input("gpt-5.6-luna")
+    old = providers.normalise(responses("gpt-6.1-sol")[0]["request"])[1]
+    new = providers.normalise(responses("gpt-6.2-sol")[0]["request"])[1]
+    assert system_text(old) and not system_text(new) and new["uncached_tail"]
+    before, after = examine(load_rows(responses("gpt-6.1-sol")))[0], examine(load_rows(responses("gpt-6.2-sol")))[0]
+    assert before.cost("auto_5m") < 0.4                      # instructions lead the prompt and are cached
+    assert after.cost("auto_5m") > 0.7                       # the same text is paid in full every time
+    assert after.tokens == pytest.approx(before.tokens, rel=0.02)
+    rows = load_rows(responses("gpt-6.2-sol"))
+    assert any(f.rule == "CP010" for f in findings(after, rows, learn_from(rows)))
+
+
+def test_conformance_openai_gpt_5_6_luna_append_only():
+    """Replay a recorded live run and require the forecast to stay close to what was billed.
+    This run is the one the message-ending rule was corrected from, so it guards against
+    regressions; it is not independent evidence."""
+    import importlib.util
+    from pathlib import Path
+    root = Path(__file__).resolve().parent
+    fixture = json.loads((root / "conformance" / "openai_gpt-5.6-luna_append.json").read_text())
+    spec = importlib.util.spec_from_file_location("driver", root.parent / "benchmarks" / "providers" / "openai_driver.py")
+    driver = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(driver)
+    rows, usage, t = [], iter(fixture["usage"]), 0.0
+    for conversation in driver.QUESTIONS:
+        history = []
+        for question in conversation:
+            history.append({"role": "user", "content": question})
+            rows.append({"ts": t, "app": "driver", "usage": next(usage), "request": {
+                "model": fixture["model"], "messages": [{"role": "system", "content": driver.RULES}, *history]}})
+            history.append({"role": "assistant", "content": "Your order ships within the window for its category. " * 3})
+            t += 3
+    v = examine(load_rows(rows))[0]
+    assert v.measured_cost == pytest.approx(fixture["billed_cost_vs_uncached"], abs=0.005)
+    assert v.cost(v.as_sent) == pytest.approx(v.measured_cost, abs=0.02)
+    assert v.recommended == "logged"
+
+
+def test_capture_files_are_private_and_the_ledger_lists_evidence(tmp_path, capsys):
+    import os
+    from cacheplan.proxy import open_log
+    path = tmp_path / "new.jsonl"
+    with open_log(str(path)) as f:
+        f.write("{}\n")
+    if os.name == "posix":
+        assert (path.stat().st_mode & 0o077) == 0
+    assert cli.main(["providers"]) == 0
+    out = capsys.readouterr().out
+    assert "documentation only" in out and "gpt-5.6-luna" in out and "developers.openai.com" in out

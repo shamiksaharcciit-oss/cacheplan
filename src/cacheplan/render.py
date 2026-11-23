@@ -67,6 +67,8 @@ def _advice(v: Verdict) -> list[str]:
                      "so compare answer quality before adopting it.")
     if v.rules.note and v.rules.provider != "anthropic":
         lines.append(f"Note ({v.rules.provider}): {v.rules.note}.")
+    if v.rules.provider != "anthropic" and v.rules.forecast:
+        lines.append(f"Evidence for these rules: {v.rules.evidence}.")
     return lines
 
 
@@ -146,7 +148,7 @@ def as_dict(v: Verdict, fs: list[Finding]) -> dict:
                         "cost_vs_no_caching": round(v.cost(o), 4),
                         "cost_usd": None if v.dollars(o) is None else round(v.dollars(o), 6)}
                     for o in OPTIONS if o in v.usage and v.rules.forecast},
-        "forecast_available": v.rules.forecast, "provider_note": v.rules.note or None,
+        "forecast_available": v.rules.forecast, "rules_source": v.rules.source, "rules_evidence": v.rules.evidence, "provider_note": v.rules.note or None,
         "recommended": v.recommended, "reason": v.reason, "prompt_fix_option": v.fix_option,
         "plan": {"head": v.plan.head, "constant_prefix_blocks": v.plan.const_prefix,
                  "offsets_from_end": list(v.plan.offsets)},

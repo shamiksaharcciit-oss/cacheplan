@@ -65,7 +65,13 @@ def _strip(o):
 
 
 def strip_cache_control(req: dict) -> dict:
-    return _strip({k: req[k] for k in ("tools", "system", "messages") if req.get(k)})
+    return _strip({k: req[k] for k in ("tools", "system", "messages", "uncached_tail") if req.get(k)})
+
+
+def tail_text(req: dict) -> str:
+    """Text the provider places after the conversation and never caches (top-level
+    `instructions` on OpenAI GPT-6.2 and later). It is billed in full on every request."""
+    return "".join(json.dumps(_strip(b), sort_keys=True) for b in req.get("uncached_tail") or [])
 
 
 def prefix_blocks(req: dict) -> list[tuple[str, int]]:

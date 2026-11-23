@@ -111,6 +111,13 @@ def scramble(value, salt: bytes, key: str = ""):
     return value
 
 
+def open_log(path: str):
+    """Open a capture file for appending. A new file is created readable by its owner only
+    (on POSIX; Windows keeps the folder's permissions), since it holds prompt text."""
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    return os.fdopen(fd, "a", encoding="utf-8")
+
+
 def entry(app: str, started: float, status: int, usage: dict | None, req: dict,
           provider: str, model: str | None = None) -> dict:
     """One log line. Provider and model are written only when the request does not show them."""
@@ -180,7 +187,7 @@ def make_handler(upstream: str, out_path: str, app: str, no_content: bool = Fals
                     counter[0] += 1
                     row = entry(app, started, status, usage, scramble(req, salt) if no_content else req, *kind)
                     row = {"id": f"{app}-{counter[0]}", **row}
-                    with open(out_path, "a", encoding="utf-8") as f:
+                    with open_log(out_path) as f:
                         f.write(json.dumps(row) + "\n")
                     print(f"captured {counter[0]} requests", end="\r", flush=True)
 

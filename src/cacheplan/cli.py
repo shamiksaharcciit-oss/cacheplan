@@ -223,6 +223,19 @@ def cmd_capture(a) -> int:
     return 0
 
 
+def cmd_providers(_) -> int:
+    """The provider support ledger: what is forecast, from which source, with what evidence."""
+    from .providers import rules
+    cases = [("anthropic", "claude-sonnet-5-5"), ("bedrock", "anthropic.claude-sonnet-5-5"), ("bedrock", "amazon.nova-pro"),
+             ("openai", "gpt-6.2-sol"), ("openai", "gpt-5.6-luna"), ("openai", "gpt-5.4-mini"), ("gemini", "gemini-3-flash")]
+    for provider, model in cases:
+        r = rules(provider, model)
+        life = "-" if not r.forecast else r.name_short + ("" if r.write_long is None else f", {r.name_long}")
+        print(f"{provider} ({model})\n  caching    {r.mode if r.forecast else 'diagnosis only'}; minimum {r.minimum:,} tokens; lifetimes: {life}\n"
+              f"  evidence   {r.evidence}\n  source     {r.source}")
+    return 0
+
+
 def cmd_rules(_) -> int:
     for rule, what in RULES.items():
         print(f"{rule}  {what}")
@@ -307,6 +320,8 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(fn=cmd_capture)
 
     sub.add_parser("rules", help="list rule ids").set_defaults(fn=cmd_rules)
+    sub.add_parser("providers", help="what is forecast per provider, from which source, with what evidence"
+                   ).set_defaults(fn=cmd_providers)
     a = ap.parse_args(argv)
     return a.fn(a)
 

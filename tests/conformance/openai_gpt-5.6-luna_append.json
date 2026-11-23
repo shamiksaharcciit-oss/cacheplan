@@ -1,0 +1,116 @@
+{
+ "provider": "openai",
+ "model": "gpt-5.6-luna",
+ "api": "chat.completions",
+ "recorded": "2026-11-24",
+ "scenario": "benchmarks/providers/openai_driver.py without --stamp: three append-only conversations of five turns, 3 s apart",
+ "note": "Usage is as OpenAI reported it. Assistant replies are not stored; the test rebuilds requests with placeholder replies.",
+ "billed_cost_vs_uncached": 0.19,
+ "usage": [
+  {
+   "prompt_tokens": 3365,
+   "prompt_tokens_details": {
+    "cached_tokens": 0,
+    "cache_write_tokens": 3362
+   }
+  },
+  {
+   "prompt_tokens": 3405,
+   "prompt_tokens_details": {
+    "cached_tokens": 3362,
+    "cache_write_tokens": 40
+   }
+  },
+  {
+   "prompt_tokens": 3443,
+   "prompt_tokens_details": {
+    "cached_tokens": 3402,
+    "cache_write_tokens": 38
+   }
+  },
+  {
+   "prompt_tokens": 3500,
+   "prompt_tokens_details": {
+    "cached_tokens": 3440,
+    "cache_write_tokens": 57
+   }
+  },
+  {
+   "prompt_tokens": 3556,
+   "prompt_tokens_details": {
+    "cached_tokens": 3497,
+    "cache_write_tokens": 56
+   }
+  },
+  {
+   "prompt_tokens": 3365,
+   "prompt_tokens_details": {
+    "cached_tokens": 3351,
+    "cache_write_tokens": 11
+   }
+  },
+  {
+   "prompt_tokens": 3409,
+   "prompt_tokens_details": {
+    "cached_tokens": 3362,
+    "cache_write_tokens": 44
+   }
+  },
+  {
+   "prompt_tokens": 3444,
+   "prompt_tokens_details": {
+    "cached_tokens": 3406,
+    "cache_write_tokens": 35
+   }
+  },
+  {
+   "prompt_tokens": 3497,
+   "prompt_tokens_details": {
+    "cached_tokens": 3441,
+    "cache_write_tokens": 53
+   }
+  },
+  {
+   "prompt_tokens": 3543,
+   "prompt_tokens_details": {
+    "cached_tokens": 3494,
+    "cache_write_tokens": 46
+   }
+  },
+  {
+   "prompt_tokens": 3364,
+   "prompt_tokens_details": {
+    "cached_tokens": 3351,
+    "cache_write_tokens": 10
+   }
+  },
+  {
+   "prompt_tokens": 3401,
+   "prompt_tokens_details": {
+    "cached_tokens": 3361,
+    "cache_write_tokens": 37
+   }
+  },
+  {
+   "prompt_tokens": 3458,
+   "prompt_tokens_details": {
+    "cached_tokens": 3398,
+    "cache_write_tokens": 57
+   }
+  },
+  {
+   "prompt_tokens": 3506,
+   "prompt_tokens_details": {
+    "cached_tokens": 3455,
+    "cache_write_tokens": 48
+   }
+  },
+  {
+   "prompt_tokens": 3558,
+   "prompt_tokens_details": {
+    "cached_tokens": 3503,
+    "cache_write_tokens": 52
+   }
+  }
+ ]
+}

@@ -2,9 +2,22 @@
 
 ## Unreleased
 
+- **OpenAI GPT-6.2 and later: top-level `instructions` are no longer treated as a cacheable
+  system prompt.** Those models append them after the input and bill them uncached on every
+  request. They are modelled that way and reported as the new finding `CP010`. Found in an
+  external review; forecasts for such requests were too optimistic in 0.3.0a1.
+- **The GitHub Action installs the code of the revision it is pinned to**, instead of
+  whatever `pip install cacheplan` resolves to. `version` still selects a PyPI release.
 - `capture --no-content` (and `no_content=True` on the recorders) scrambles prompt text as it
-  is written. Reports still work on such a log.
+  is written. Reports still work on such a log. New capture files are owner-readable only.
 - `capture` now says at start-up that the log holds everything sent to the model.
+- `cacheplan providers` and an "Evidence for these rules" line in reports: each provider's
+  rule set carries its source and what live evidence stands behind it.
+- A first conformance fixture: the recorded usage of a live gpt-5.6-luna run, replayed in
+  the test suite.
+- Benchmark and accuracy tables re-measured with one version at the published cache-read
+  price; Aider compared like for like with its own caching.
+- Workflow actions are pinned to commit SHAs.
 
 ## 0.3.0a1
 

@@ -30,7 +30,7 @@ import json
 import threading
 import time
 
-from .proxy import MAX_KEEP, classify, entry, new_salt, scramble, usage_from_response
+from .proxy import MAX_KEEP, classify, entry, new_salt, open_log, scramble, usage_from_response
 
 try:
     import httpx
@@ -49,7 +49,7 @@ def _kind(request):
 
 
 def _append(path: str, row: dict) -> None:
-    with _lock, open(path, "a", encoding="utf-8") as f:
+    with _lock, open_log(path) as f:
         f.write(json.dumps(row, default=str) + "\n")
 
 

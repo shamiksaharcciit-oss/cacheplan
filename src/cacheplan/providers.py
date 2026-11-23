@@ -12,6 +12,7 @@ When a log holds the provider's usage, the report's forecast check shows how wel
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, replace
 
 from .models import spec as anthropic_spec
@@ -38,6 +39,8 @@ class Rules:
     forecast: bool = True              # False: diagnosis only, no cost forecast
     automatic: bool = True             # False: no automatic mode, breakpoints only
     message_entries: bool = False      # a cache write also makes earlier message endings readable
+    source: str = ""                   # where the rules were read
+    evidence: str = "documentation only; not compared with live billing"
     known: bool = False
     note: str = ""
 
@@ -64,6 +67,13 @@ _OPENAI = [
     ("gpt-4o-mini", 0.15, 0.075, "implicit"), ("gpt-4o", 2.5, 1.25, "implicit"),
     ("o3", 2.0, 0.50, "implicit"),
 ]
+
+
+def instructions_after_input(model: str | None) -> bool:
+    """True for OpenAI models that place top-level `instructions` after `input`, outside the
+    cache: GPT-6.2 and later, per OpenAI's prompt-caching guide (read 24 November 2026)."""
+    m = re.search(r"gpt-(\d+)(?:\.(\d+))?", (model or "").lower())
+    return bool(m) and (int(m.group(1)), int(m.group(2) or 0)) >= (6, 2)
 
 
 def _openai(model: str | None) -> Rules:
@@ -104,18 +114,44 @@ def _bedrock(model: str | None) -> Rules:
                  note="caching rules for this Bedrock model are not built in: diagnosis only")
 
 
+DOCS = {
+    "anthropic": "https://docs.claude.com/en/docs/build-with-claude/prompt-caching",
+    "openai": "https://developers.openai.com/api/docs/guides/prompt-caching",
+    "bedrock": "https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html",
+    "gemini": "https://ai.google.dev/gemini-api/docs/caching",
+}
+READ_ON = "2026-11-23"
+
+
+def _evidence(r: Rules) -> str:
+    """What stands behind a rule set. Kept next to the rules so the report, the README table
+    and `cacheplan providers` cannot drift apart."""
+    if not r.forecast:
+        return "no forecast"
+    if r.provider == "anthropic":
+        return "live: 14 forecast-vs-billed rows on claude-sonnet-5-5, all within 2 points (2026-11-24)"
+    if r.provider == "openai" and r.mode == "implicit":
+        return "live: 2 runs on gpt-5.4-mini, 19% vs 21% and 23% vs 17% with a warm cache (2026-11-23)"
+    if r.provider == "openai":
+        return ("live: 2 runs on gpt-5.6-luna, automatic mode only (2026-11-24); breakpoints, the 12-hour "
+                "lifetime and GPT-6.x are documentation only")
+    return "documentation only; not compared with live billing"
+
+
 def rules(provider: str, model: str | None) -> Rules:
     if provider == "openai":
-        return _openai(model)
-    if provider == "bedrock":
-        return _bedrock(model)
-    if provider == "gemini":
+        r = _openai(model)
+    elif provider == "bedrock":
+        r = _bedrock(model)
+    elif provider == "gemini":
         name = (model or "").lower()
         minimum = 2048 if "gemini-2" in name else 4096 if "gemini" in name else 2048
-        return Rules("gemini", "implicit", minimum, 0, None, forecast=False, known="gemini" in name,
-                     note="Gemini's documentation does not state the cached-token discount or lifetime: "
-                          "diagnosis only, no cost forecast")
-    return _anthropic(model)
+        r = Rules("gemini", "implicit", minimum, 0, None, forecast=False, known="gemini" in name,
+                  note="Gemini's documentation does not state the cached-token discount or lifetime: "
+                       "diagnosis only, no cost forecast")
+    else:
+        r = _anthropic(model)
+    return replace(r, source=f"{DOCS[r.provider]} (read {READ_ON})", evidence=_evidence(r))
 
 
 # ---------------------------------------------------------------- request conversion
@@ -153,8 +189,11 @@ def from_openai(body: dict) -> dict:
         fn = t.get("function") if isinstance(t.get("function"), dict) else t
         tools.append(dict(t, name=fn.get("name") or t.get("type") or "tool"))
     system: list[dict] = []
+    tail: list[dict] = []
     if isinstance(body.get("instructions"), str) and body["instructions"]:
-        system.append(_text(body["instructions"]))
+        # GPT-6.2 and later append top-level instructions after the input and bill them
+        # uncached on every request; earlier models render them ahead of the input.
+        (tail if instructions_after_input(body.get("model")) else system).append(_text(body["instructions"]))
     items = body.get("messages")
     if items is None:
         items = body.get("input")
@@ -188,6 +227,8 @@ def from_openai(body: dict) -> dict:
         out["tools"] = tools
     if system:
         out["system"] = system
+    if tail:
+        out["uncached_tail"] = tail
     # GPT-5.6 and later cache automatically unless the request asks for explicit mode.
     options = body.get("prompt_cache_options") or {}
     if _openai(body.get("model")).mode == "breakpoints" and options.get("mode", "implicit") != "explicit":

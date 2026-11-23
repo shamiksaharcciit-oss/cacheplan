@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
-from .messages import ONE_HOUR, est_tokens, located_blocks, prefix_blocks
+from .messages import ONE_HOUR, est_tokens, located_blocks, prefix_blocks, tail_text
 from .models import TOOL_USE_OVERHEAD
 
 LOOKBACK = 20
@@ -78,8 +78,9 @@ class CacheSim:
             cum.append(total)
         bps = [(i, self.ttl_long if ttl >= ONE_HOUR else self.ttl_short)
                for i, (_, ttl) in enumerate(blocks) if ttl and cum[i] >= floor]
+        tail = round(est_tokens(tail_text(req)) * scale) if req.get("uncached_tail") else 0
         if not bps:
-            return Usage(input_tokens=round(total))
+            return Usage(input_tokens=round(total) + tail)
         read = -1
         for bp, _ in reversed(bps):
             for j in range(bp, max(-1, bp - LOOKBACK - 1), -1):
@@ -104,7 +105,7 @@ class CacheSim:
         r = round(cum[read]) if read >= 0 else 0
         w = round(cum[end]) - r
         long_lived = bool(written) and written[-1][1] == self.ttl_long and self.ttl_long != self.ttl_short
-        return Usage(round(total) - round(cum[end]), w, r, w if long_lived else 0)
+        return Usage(round(total) - round(cum[end]) + tail, w, r, w if long_lived else 0)
 
 
 class ImplicitSim:
