@@ -22,16 +22,18 @@ Input cost relative to the same requests without caching, measured on the live A
 with `claude-sonnet-5-5`. 13 to 18 requests per framework.
 
 <!-- results:start -->
-Pasted from the first run on 23 November 2026; `bench.py verify` rewrites this block.
+Measured on the live API on 24 November 2026 with cacheplan 0.3.0a1, on the captures of 23 November.
+Cache reads are priced at 0.05x an input token, the published rate for the model used.
+`bench.py verify` rewrites this block.
 
 | Framework | Version | As shipped | Automatic caching | Best option measured | Finding |
 | --- | --- | --- | --- | --- | --- |
-| smolagents `ToolCallingAgent` | 1.26.0 | 100% (caching off) | 40% | 36% planned breakpoints | Caching off |
-| Anthropic SDK tool loop | 2.13.0 | 100% (caching off) | 46% | 46% automatic | Caching off |
-| LangChain `create_agent` | 1.5.2 | 100% (caching off) | 46% | 46% automatic | Caching off |
-| Pydantic AI `Agent` | 2.71.0 | 100% (caching off) | 48% | 48% automatic | Caching off |
-| CrewAI `Agent` | 1.15.44 | 90% (caches by default) | 99% | 90% as shipped | Short prompts |
-| LangGraph ReAct template | langgraph 1.2.24 | 100% (caching off) | 124% | 51% after moving the timestamp | Timestamp in the system prompt ([issue](https://github.com/langchain-ai/react-agent/issues/123)) |
+| smolagents `ToolCallingAgent` | 1.26.0 | 100% (caching off) | 36% | 32% planned breakpoints | Caching off |
+| LangChain `create_agent` | 1.5.2 | 100% (caching off) | 42% | 42% automatic | Caching off |
+| Anthropic SDK tool loop | 2.13.0 | 100% (caching off) | 43% | 43% automatic | Caching off |
+| Pydantic AI `Agent` | 2.71.0 | 100% (caching off) | 45% | 45% automatic | Caching off |
+| CrewAI `Agent` | 1.15.44 | 89% (caches by default) | 97% | 89% as shipped | Short prompts |
+| LangGraph ReAct template | langgraph 1.2.24 | 100% (caching off) | 124% | 48% after moving the timestamp | Timestamp in the system prompt ([issue](https://github.com/langchain-ai/react-agent/issues/123)) |
 <!-- results:end -->
 
 cacheplan 0.1.0a1 forecast five of the six within one point. It missed CrewAI (forecast

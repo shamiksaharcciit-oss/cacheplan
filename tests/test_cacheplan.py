@@ -788,3 +788,18 @@ def test_newer_openai_models_reuse_earlier_message_endings_across_conversations(
     assert second.cache_read_input_tokens > 0.9 * second.total
     assert providers.rules("openai", "gpt-5.6-luna").message_entries
     assert not providers.rules("bedrock", "anthropic.claude-sonnet-5-5").message_entries
+
+
+def test_capture_without_content_keeps_the_report_and_drops_the_text(tmp_path, capsys):
+    from cacheplan.proxy import new_salt, scramble
+    salt = new_salt()
+    rows = openai_chat("gpt-6.1-sol", stamp=True)
+    hidden = [dict(r, request=scramble(r["request"], salt)) for r in rows]
+    raw = json.dumps(hidden)
+    assert "support agent" not in raw and "politely" not in raw and "gpt-6.1-sol" in raw and '"role": "system"' in raw
+    assert len(json.dumps(hidden[3]["request"])) == len(json.dumps(rows[3]["request"]))
+    a, b = examine(load_rows(rows))[0], examine(load_rows(hidden))[0]
+    assert b.layout == a.layout and b.cost("auto_5m") == pytest.approx(a.cost("auto_5m"), abs=0.02)
+    assert b.fix_option and b.cost(b.fix_option) == pytest.approx(a.cost(a.fix_option), abs=0.03)
+    assert cli.main(["report", _write(tmp_path, "hidden.jsonl", hidden)]) == 0
+    assert "CP001" in capsys.readouterr().out

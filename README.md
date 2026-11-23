@@ -14,8 +14,10 @@
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/shamiksaharcciit-oss/cacheplan/main/docs/img/results.svg" alt="Input cost with caching relative to no caching: LangGraph ReAct template 125% automatic, 51% with cacheplan; Aider 125% automatic, 66% with cacheplan; Claude Code 27% either way" width="800">
+  <img src="https://raw.githubusercontent.com/shamiksaharcciit-oss/cacheplan/main/docs/img/results.svg" alt="Input cost with caching relative to no caching: LangGraph ReAct template 124% automatic, 48% with cacheplan; Aider 125% automatic, 63% with cacheplan; Claude Code 27% either way" width="800">
 </p>
+
+<p align="center"><sub>LangGraph ReAct template: from the <a href="#benchmark-six-agent-starters">benchmark</a> below. Aider and Claude Code: separate captures of real coding sessions, described under <a href="#how-accurate-is-the-forecast">How accurate is the forecast?</a> Claude Code's figure is a local forecast, not measured.</sub></p>
 
 Prompt caching can cut your input bill by more than half. It can also **raise it by 25%**,
 because every cache write costs extra and is wasted if nothing reads it back. Which one you
@@ -76,8 +78,15 @@ export ANTHROPIC_BASE_URL=http://127.0.0.1:8787
 $env:ANTHROPIC_BASE_URL = "http://127.0.0.1:8787"
 ```
 
-The proxy writes request bodies only. Headers never reach the file, so your API key stays
-out of it.
+The proxy writes request bodies and token counts. Headers never reach the file, so your API
+key stays out of it.
+
+> **The log holds everything your application sends to the model:** system prompts, user
+> messages, tool definitions, file contents. Check it before you share or commit it. To
+> keep prompt text out of the file altogether, capture with `--no-content`: every word is
+> replaced by scrambled characters of the same length, using a key that is never stored.
+> Reports still work on such a log, with the same costs and findings but no readable
+> examples, and it cannot be replayed with `verify` or `quality`.
 
 **3. Get the verdict**
 
@@ -174,7 +183,7 @@ react-template
 | `cacheplan check LOG --min-reusable 0.5` | Fail a pipeline when too little of the prompt is reusable |
 | `cacheplan quality LOG --model M --yes` | Check whether the prompt fix changes the model's answers, against a control |
 | `cacheplan baseline LOG --save FILE` / `--compare FILE` | Save a content-free summary and fail later runs that are worse |
-| `cacheplan capture --out LOG` | Record requests and their token usage through a local proxy. `--provider openai` or `gemini` for those APIs |
+| `cacheplan capture --out LOG` | Record requests and their token usage through a local proxy. `--provider openai` or `gemini` for those APIs; `--no-content` scrambles prompt text |
 | `cacheplan rules` | List rule ids |
 
 Useful options:
@@ -217,7 +226,8 @@ client = anthropic.Anthropic(http_client=anthropic.DefaultHttpxClient(
 ```
 
 Use `AsyncRecordingTransport` with `anthropic.DefaultAsyncHttpxClient` for the async client.
-Headers and response text are never written. The same transport works for the OpenAI SDK
+Headers and response text are never written; pass `no_content=True` to scramble prompt text
+too. The same transport works for the OpenAI SDK
 (`openai.OpenAI(http_client=openai.DefaultHttpxClient(transport=...))`). For Bedrock:
 
 ```python
@@ -294,7 +304,7 @@ As a GitHub Action:
 - uses: actions/setup-python@v7
   with:
     python-version: "3.12"
-- uses: shamiksaharcciit-oss/cacheplan@main
+- uses: shamiksaharcciit-oss/cacheplan@v0.3.0a1
   with:
     log: captures/session.jsonl
     min-reusable: "0.5"
@@ -305,7 +315,7 @@ As a GitHub Action:
 The report is added to the job summary without prompt text. Or call the commands directly:
 
 ```yaml
-- run: pip install --pre cacheplan
+- run: pip install cacheplan==0.3.0a1
 - run: cacheplan check captures/session.jsonl --min-reusable 0.5
 - run: cacheplan baseline captures/session.jsonl --compare captures/baseline.json
 ```
@@ -315,55 +325,65 @@ This catches it in the pull request.
 
 ## Benchmark: six agent starters
 
-The same three conversations through each framework's default agent, measured on the live
-Anthropic API on 23 November 2026. Input cost is relative to the same requests without
+The same three conversations through each framework's default agent, captured on 23 November
+2026 and measured on the live Anthropic API with cacheplan 0.3.0a1 (`claude-sonnet-5-5`, cache
+reads at 0.05x an input token). Input cost is relative to the same requests without
 caching. Scripts and method: [`benchmarks/frameworks`](benchmarks/frameworks).
 
 | Framework | Version | As shipped | Automatic caching | Best option measured | Finding |
 | --- | --- | --- | --- | --- | --- |
-| smolagents `ToolCallingAgent` | 1.26.0 | 100% (caching off) | 40% | 36% planned breakpoints | Caching off |
-| Anthropic SDK tool loop | 2.13.0 | 100% (caching off) | 46% | 46% automatic | Caching off |
-| LangChain `create_agent` | 1.5.2 | 100% (caching off) | 46% | 46% automatic | Caching off |
-| Pydantic AI `Agent` | 2.71.0 | 100% (caching off) | 48% | 48% automatic | Caching off |
-| CrewAI `Agent` | 1.15.44 | 90% (caches by default) | 99% | 90% as shipped | Short prompts |
-| LangGraph ReAct template | langgraph 1.2.24 | 100% (caching off) | 124% | 51% after moving the timestamp | Timestamp in the system prompt ([issue](https://github.com/langchain-ai/react-agent/issues/123)) |
+| smolagents `ToolCallingAgent` | 1.26.0 | 100% (caching off) | 36% | 32% planned breakpoints | Caching off |
+| LangChain `create_agent` | 1.5.2 | 100% (caching off) | 42% | 42% automatic | Caching off |
+| Anthropic SDK tool loop | 2.13.0 | 100% (caching off) | 43% | 43% automatic | Caching off |
+| Pydantic AI `Agent` | 2.71.0 | 100% (caching off) | 45% | 45% automatic | Caching off |
+| CrewAI `Agent` | 1.15.44 | 89% (caches by default) | 97% | 89% as shipped | Short prompts |
+| LangGraph ReAct template | langgraph 1.2.24 | 100% (caching off) | 124% | 48% after moving the timestamp | Timestamp in the system prompt ([issue](https://github.com/langchain-ai/react-agent/issues/123)) |
 
-Five of the six ship with caching off. For four of them, switching it on roughly halves the
-input bill. For one it raises the bill, and `cacheplan` says why.
-
-**A correction to these figures.** They were computed with cache reads priced at 0.1x an
-input token. Anthropic's price list gives 0.05x for the model used here, so the true cost of
-every row that reads from the cache is lower than shown, by 0.05 times its read share: about
-3 points for the LangGraph fix (64% read) and 2 points for Aider's breakpoints. Rows that
-read nothing, such as the 124% and 125%, are unaffected. From 0.2.0a1 the read price is
-looked up per model.
+Five of the six ship with caching off. For four of them, switching it on cuts the input
+bill by more than half. For one it raises the bill, and `cacheplan` says why.
 
 ## How accurate is the forecast?
 
-Forecasts checked with `cacheplan verify` against the live API (one model, short sessions):
+Forecasts checked against the live API. The first nine rows were all produced by cacheplan
+0.3.0a1 on 24 November 2026 (`bench.py verify`, `claude-sonnet-5-5`, short sessions):
 
 | Application | Option | Forecast | Measured |
 | --- | --- | --- | --- |
-| LangGraph ReAct template | Automatic caching, 5-minute | 125% | 124% |
-| LangGraph ReAct template | Prompt fix + breakpoints, 5-minute | 53% | 51% |
-| Anthropic SDK tool loop | Automatic caching, 5-minute | 45% | 46% |
-| LangChain `create_agent` | Automatic caching, 5-minute | 45% | 46% |
-| Pydantic AI `Agent` | Automatic caching, 5-minute | 48% | 48% |
-| smolagents `ToolCallingAgent` | Planned breakpoints, 5-minute | 37% | 36% |
-| Aider | Planned breakpoints, 5-minute | 63% | 62% |
-| Aider | Planned breakpoints, 1-hour | 91% | 90% |
-| Aider | Aider's own caching (`--cache-prompts`) | 65% | 64% |
-| CrewAI `Agent` | CrewAI's own caching | 100% | 90% |
-| CrewAI `Agent` | Automatic caching, 5-minute | 111% | 99% |
+| LangGraph ReAct template | Automatic caching, 5-minute | 124% | 124% |
+| LangGraph ReAct template | Prompt fix + breakpoints, 5-minute | 50% | 48% |
+| Anthropic SDK tool loop | Automatic caching, 5-minute | 43% | 43% |
+| LangChain `create_agent` | Automatic caching, 5-minute | 42% | 42% |
+| Pydantic AI `Agent` | Automatic caching, 5-minute | 44% | 45% |
+| smolagents `ToolCallingAgent` | Automatic caching, 5-minute | 36% | 36% |
+| smolagents `ToolCallingAgent` | Planned breakpoints, 5-minute | 32% | 32% |
+| CrewAI `Agent` | CrewAI's own caching | 90% | 89% |
+| CrewAI `Agent` | Automatic caching, 5-minute | 97% | 97% |
 
-Nine of the eleven are within two points. The CrewAI rows are the miss, made by version
-0.1.0a1: its prompts are short, and the forecast wrongly predicted they were below the
-minimum cacheable length. Token counts are estimated from characters, so prompts near the
-minimum remain the least reliable case, and the report now warns when that applies.
+All nine are within two points; the largest gap is the LangGraph prompt fix. Two things keep
+this from being stronger evidence than it looks. The breakpoint plans and the prompt fix
+were learned on the same captures they are scored on. And the character-to-token ratio the
+forecast uses was tuned on the CrewAI capture after 0.1.0a1 missed it by ten points, so the
+CrewAI rows show that the miss is repaired, not that it was predicted. Prompts near the
+minimum cacheable length remain the least reliable case, and the report warns when that
+applies.
 
-For Aider, the breakpoint plan was learned from one session and scored on a different one,
-and it matched Aider's hand-tuned caching. Claude Code was at its ceiling already (27%,
-local model only), and `cacheplan` correctly recommended changing nothing.
+Aider is the out-of-sample case: the breakpoint plan was learned from one coding session
+and scored on a different one (`verify --learn-from`, same version, same day):
+
+| Application | Option | Forecast | Measured |
+| --- | --- | --- | --- |
+| Aider, main prompt | Automatic caching, 5-minute | 125% | 125% |
+| Aider, main prompt | Planned breakpoints, 5-minute | 64% | 63% |
+| Aider, main prompt | Planned breakpoints, 1-hour | 81% | 80% |
+| Aider with `--cache-prompts`, a third session | Aider's own caching, as logged | 57% | 57% |
+| Aider with `--cache-prompts`, the same third session | Planned breakpoints, 5-minute | 54% | 54% |
+
+The last two rows are the like-for-like comparison: the same nine requests, once with the
+breakpoints Aider's authors placed by hand and once with the plan `cacheplan` learned from a
+different session. The learned plan came out three points cheaper. That is one short
+session, so read it as "on a par with hand-tuned caching", not as a win. Claude Code was at
+its ceiling already (27%, local forecast only, never measured), and `cacheplan` recommended
+changing nothing.
 
 ## Limits
 

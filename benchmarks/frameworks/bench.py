@@ -34,11 +34,28 @@ FRAMEWORKS = {      # driver -> (display name, distribution whose version is rep
 }
 
 
-def version(dist: str) -> str:
+def version(dist: str, name: str | None = None) -> str:
+    """The version the capture was made with (recorded beside it), else the one installed now.
+    Results are often produced from a different environment than the captures."""
+    saved = CAPTURES / "versions.json"
+    if name and saved.exists():
+        recorded = json.loads(saved.read_text(encoding="utf-8")).get(name)
+        if recorded:
+            return recorded
     try:
         return md.version(dist)
     except md.PackageNotFoundError:
-        return "not installed"
+        return "not recorded"
+
+
+def _remember_version(name: str) -> None:
+    saved = CAPTURES / "versions.json"
+    known = json.loads(saved.read_text(encoding="utf-8")) if saved.exists() else {}
+    try:
+        known[name] = md.version(FRAMEWORKS[name][1])
+    except md.PackageNotFoundError:
+        return
+    saved.write_text(json.dumps(known, indent=1), encoding="utf-8")
 
 
 def capture(names: list[str], stand_in: bool, port: int) -> None:
@@ -60,6 +77,7 @@ def capture(names: list[str], stand_in: bool, port: int) -> None:
     for name in names:
         out = CAPTURES / f"{name}.jsonl"
         out.unlink(missing_ok=True)
+        _remember_version(name)
         proxy = serve(port, upstream, str(out), name)
         threading.Thread(target=proxy.serve_forever, daemon=True).start()
         url = f"http://127.0.0.1:{proxy.server_port}"
@@ -111,9 +129,9 @@ def results(measured: dict | None = None) -> None:
         fix = m.get(v.fix_option, v.cost(v.fix_option)) if v.fix_option else None
         rules = ", ".join(sorted({f.rule for f in fs})) or "none"
         shipped = f"{m.get('logged', v.cost('logged')):.0%} (caches by default)" if "logged" in v.usage else "100% (caching off)"
-        table.append(f"| {label} | {version(dist)} | {len(rows)} | {v.reusable:.0%} | {shipped} | {auto:.0%} | "
+        table.append(f"| {label} | {version(dist, name)} | {len(rows)} | {v.reusable:.0%} | {shipped} | {auto:.0%} | "
                      f"{OPTIONS[v.recommended][0]} | {rec_cost:.0%} | {f'{fix:.0%}' if fix else '-'} | {rules} |")
-        data[name] = {"label": label, "version": version(dist), "requests": len(rows), "layout": v.layout,
+        data[name] = {"label": label, "version": version(dist, name), "requests": len(rows), "layout": v.layout,
                       "reusable": round(v.reusable, 4), "recommended": v.recommended,
                       "forecast": {o: round(v.cost(o), 4) for o in v.usage}, "measured": m,
                       "prompt_fix_option": v.fix_option, "findings": [f"{f.rule} {f.message}" for f in fs]}
