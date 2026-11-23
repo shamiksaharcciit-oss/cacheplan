@@ -375,11 +375,13 @@ and scored on a different one (`verify --learn-from`, same version, same day):
 | Aider, main prompt | Automatic caching, 5-minute | 125% | 125% |
 | Aider, main prompt | Planned breakpoints, 5-minute | 64% | 63% |
 | Aider, main prompt | Planned breakpoints, 1-hour | 81% | 80% |
+| Aider with `--cache-prompts`, a third session | Aider's own caching, as logged | 57% | 57% |
 
-Aider's own hand-tuned caching (`--cache-prompts`) measured 64% on a third session with
-cacheplan 0.1.0a1, which priced cache reads at twice the published rate, so the true figure
-is about two points lower. The learned plan is therefore close to the hand-tuned one, not
-shown to beat it. Claude Code was at its ceiling already (27%, local forecast only, never
+Aider's own hand-tuned caching measured 57% on its session; the learned plan measured 63% on
+another. The sessions differ, so this is not a like-for-like comparison, but it does not
+show the learned plan matching the hand-tuned one: on these numbers the hand-tuned caching
+is ahead. What the learned plan does is take an application from 125% to 63% without anyone
+reading its code. Claude Code was at its ceiling already (27%, local forecast only, never
 measured), and `cacheplan` recommended changing nothing.
 
 ## Limits
