@@ -6,3 +6,9 @@ build/
 .venv/
 captures/
 *.jsonl
+
+benchmarks/frameworks/_vendor/
+benchmarks/frameworks/captures/
+benchmarks/frameworks/results.*
+benchmarks/frameworks/measured.json
+.bench/

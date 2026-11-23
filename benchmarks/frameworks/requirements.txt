@@ -1,0 +1,9 @@
+# Frameworks under test. Versions are recorded in the results table at run time.
+anthropic
+langchain
+langgraph
+langchain-anthropic
+langchain-tavily
+pydantic-ai-slim[anthropic]
+smolagents[litellm]
+crewai
