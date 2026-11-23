@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from .diagnose import summarise
 from .forecast import Knowledge, Verdict
-from .messages import prefix_blocks
+from .messages import est_tokens, prefix_blocks, tail_text
 
 RULES = {
     "CP001": "a value in the system prompt or tools changes between requests",
@@ -17,6 +17,7 @@ RULES = {
     "CP007": "previously sent message content changes between requests",
     "CP008": "many pauses are longer than the short cache lifetime",
     "CP009": "cache writes are rarely read back with the current settings",
+    "CP010": "top-level instructions are billed uncached on every request",
 }
 
 
@@ -101,6 +102,11 @@ def findings(v: Verdict, rows: list[dict], k: Knowledge, show_content: bool = Tr
         out.append(Finding("CP008", f"{v.gaps_over_5m:.0%} of pauses between requests exceed {short}",
                            f"compare the {v.rules.name_long} rows in the forecast" if v.rules.write_long is not None and v.rules.forecast
                            else "nothing cached survives those pauses on this model"))
+    tail = sum(est_tokens(tail_text(r["request"])) for r in rows)
+    if tail >= 0.01 * v.tokens:
+        out.append(Finding("CP010", f"top-level `instructions` are ~{tail / max(1, v.tokens):.0%} of input tokens; this model "
+                           "places them after the input, outside the cache, and bills them in full every time",
+                           "send them as a developer message at the start of `input` instead", tail))
     if "logged" in v.usage:
         u = v.usage["logged"]
         if u.cache_creation_input_tokens and u.cache_read_input_tokens < 0.5 * u.cache_creation_input_tokens:

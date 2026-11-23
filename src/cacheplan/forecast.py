@@ -10,7 +10,7 @@ from .diagnose import Break, find_breaks
 from .logs import by_app, conversation_key, real_usage
 from .messages import (FIVE_MIN, ONE_HOUR, BreakPlan, Template, canonicalize_request, cc,
                        est_tokens, learn, learn_breakpoints, place_breakpoints, prefix_blocks,
-                       strip_cache_control, system_text)
+                       strip_cache_control, system_text, tail_text)
 from .providers import Rules, rules as provider_rules
 from .sim import CacheSim, ImplicitSim, Usage
 
@@ -48,7 +48,7 @@ class Knowledge:
 
 
 def _est(req: dict) -> int:
-    return sum(est_tokens(t) for t, _ in prefix_blocks(strip_cache_control(req)))
+    return sum(est_tokens(t) for t, _ in prefix_blocks(strip_cache_control(req))) + est_tokens(tail_text(req))
 
 
 def calibrate(rows: list[dict], default_overhead: int) -> Calibration:
@@ -145,7 +145,7 @@ def build(option: str, row: dict, k: Knowledge) -> dict:
     req, app = row["request"], row["app"]
     ttl = ONE_HOUR if option.endswith("_1h") else FIVE_MIN
     if option == "logged":
-        return {f: req[f] for f in ("tools", "system", "messages", "cache_control") if req.get(f)}
+        return {f: req[f] for f in ("tools", "system", "messages", "cache_control", "uncached_tail") if req.get(f)}
     if option == "off":
         return strip_cache_control(req)
     if option.startswith("auto"):
