@@ -11,8 +11,8 @@ from .logs import by_app, conversation_key, real_usage
 from .messages import (FIVE_MIN, ONE_HOUR, BreakPlan, Template, canonicalize_request, cc,
                        est_tokens, learn, learn_breakpoints, place_breakpoints, prefix_blocks,
                        strip_cache_control, system_text)
-from .models import ModelSpec, min_cacheable, spec
-from .sim import CacheSim, Usage
+from .providers import Rules, rules as provider_rules
+from .sim import CacheSim, ImplicitSim, Usage
 
 OPTIONS = {     # key -> (label, changes the prompt text)
     "off": ("Caching off", False),
@@ -43,7 +43,7 @@ class Knowledge:
     templates: dict[str, Template | None] = field(default_factory=dict)
     plans: dict[str, dict[int, BreakPlan]] = field(default_factory=dict)      # app -> lifetime -> plan
     calibration: dict[str, Calibration] = field(default_factory=dict)
-    specs: dict[str, ModelSpec] = field(default_factory=dict)
+    specs: dict[str, Rules] = field(default_factory=dict)
     floors: dict[str, int] = field(default_factory=dict)                      # minimum cacheable tokens
 
 
@@ -78,19 +78,29 @@ def _model_of(rows: list[dict], model: str | None) -> str | None:
     return model or next((r["request"].get("model") for r in rows if r["request"].get("model")), None)
 
 
-def _cost(rows, build_fn, floor, cal, read_x) -> float:
-    sim = CacheSim()
-    return sum(sim.request(build_fn(r), r["ts"], floor, cal.overhead, cal.scale).cost_units(read_x) for r in rows)
+def _provider_of(rows: list[dict]) -> str:
+    return rows[0].get("provider") or "anthropic"
 
 
-def choose_plan(rows: list[dict], ttl: int, floor: int, cal: Calibration, read_x: float) -> BreakPlan:
+def _units(u: Usage, r: Rules) -> float:
+    return u.cost_units(r.read_x, r.write_short, r.write_long)
+
+
+def _cost(rows, build_fn, floor, cal, r: Rules) -> float:
+    sim = CacheSim(ttl_short=r.ttl_short, ttl_long=r.ttl_long)
+    return sum(_units(sim.request(build_fn(row), row["ts"], floor, cal.overhead, cal.scale), r) for row in rows)
+
+
+def choose_plan(rows: list[dict], ttl: int, floor: int, cal: Calibration, r: Rules) -> BreakPlan:
     """Pick breakpoint positions by replaying the log: candidates come from where prefixes
     were seen to repeat, and the cheapest combination under this lifetime and this log's
     real timing wins. Fewer breakpoints win ties."""
     rows = rows[:SEARCH_ROWS]
     seed = learn_breakpoints([r["request"] for r in rows])
     offsets = sorted(int(k[4:]) for k in seed.reuse if k.startswith("end-"))
-    best, best_cost = NO_PLAN, _cost(rows, lambda r: strip_cache_control(r["request"]), floor, cal, read_x)
+    if r.mode != "breakpoints" or (ttl == ONE_HOUR and r.write_long is None):
+        return NO_PLAN
+    best, best_cost = NO_PLAN, _cost(rows, lambda row: strip_cache_control(row["request"]), floor, cal, r)
     heads = [False, True]
     consts = sorted({0, seed.const_prefix})
     for n in range(0, 3):
@@ -100,7 +110,7 @@ def choose_plan(rows: list[dict], ttl: int, floor: int, cal: Calibration, read_x
                     if not (head or const or combo):
                         continue
                     plan = BreakPlan(head, const, tuple(combo), seed.reuse)
-                    c = _cost(rows, lambda r: place_breakpoints(r["request"], plan=plan, ttl=ttl), floor, cal, read_x)
+                    c = _cost(rows, lambda row: place_breakpoints(row["request"], plan=plan, ttl=ttl), floor, cal, r)
                     if c < best_cost * 0.995:           # must beat the simpler plan by a real margin
                         best, best_cost = plan, c
     return best
@@ -109,13 +119,12 @@ def choose_plan(rows: list[dict], ttl: int, floor: int, cal: Calibration, read_x
 def learn_from(rows: list[dict], min_tokens: int | None = None, model: str | None = None) -> Knowledge:
     k = Knowledge()
     for app, rs in by_app(rows).items():
-        m = _model_of(rs, model)
-        s = spec(m)
+        s = provider_rules(_provider_of(rs), _model_of(rs, model))
         k.specs[app] = s
         k.floors[app] = min_tokens or s.minimum
         k.calibration[app] = calibrate(rs, s.tool_overhead)
         k.templates[app] = learn([system_text(r["request"]) for r in rs], [conversation_key(r) for r in rs])
-        k.plans[app] = {ttl: choose_plan(rs, ttl, k.floors[app], k.calibration[app], s.read_x)
+        k.plans[app] = {ttl: choose_plan(rs, ttl, k.floors[app], k.calibration[app], s)
                         for ttl in (FIVE_MIN, ONE_HOUR)}
     return k
 
@@ -124,7 +133,7 @@ def _fill(k: Knowledge, rows: list[dict], min_tokens: int | None, model: str | N
     """Applications that were not in the learning log still need a model spec and a floor."""
     for app, rs in by_app(rows).items():
         if app not in k.specs:
-            s = spec(_model_of(rs, model))
+            s = provider_rules(_provider_of(rs), _model_of(rs, model))
             k.specs[app], k.floors[app] = s, min_tokens or s.minimum
             k.calibration[app] = calibrate(rs, s.tool_overhead)
             k.templates.setdefault(app, None)
@@ -153,15 +162,36 @@ def has_fix(rows: list[dict], k: Knowledge) -> bool:
 
 
 def simulate(rows: list[dict], k: Knowledge, options: list[str]) -> dict:
-    """{app: {option: Usage}} from the local cache model."""
+    """{app: {option: Usage}} from the local cache model. Each application is simulated
+    under its own provider's rules."""
     out: dict[str, dict[str, Usage]] = defaultdict(dict)
-    for opt in options:
-        sim = CacheSim()
-        for row in rows:
-            app = row["app"]
-            cal = k.calibration.get(app) or Calibration()
-            out[app].setdefault(opt, Usage()).add(
-                sim.request(build(opt, row, k), row["ts"], k.floors.get(app, 1024), cal.overhead, cal.scale))
+    for app, rs in by_app(rows).items():
+        r = k.specs.get(app) or Rules()
+        cal = k.calibration.get(app) or Calibration()
+        floor = k.floors.get(app, r.minimum)
+        for opt in options:
+            if opt.endswith("_1h") and r.write_long is None:
+                continue
+            if r.mode == "implicit" and opt.startswith("plan"):
+                continue
+            if not r.automatic and opt.startswith("auto"):
+                continue
+            total = Usage()
+            if r.mode == "implicit":
+                if opt == "off":                              # a reference point: these models always cache
+                    for row in rs:
+                        total.add(Usage(input_tokens=ImplicitSim(0).request(
+                            strip_cache_control(row["request"]), row["ts"], floor, cal.overhead, cal.scale).total))
+                else:
+                    sim = ImplicitSim(r.ttl_long if opt.endswith("_1h") else r.ttl_short, r.interval)
+                    for row in rs:
+                        req = strip_cache_control(build(opt, row, k)) if opt.startswith("fix") else strip_cache_control(row["request"])
+                        total.add(sim.request(req, row["ts"], floor, cal.overhead, cal.scale))
+            else:
+                sim = CacheSim(ttl_short=r.ttl_short, ttl_long=r.ttl_long)
+                for row in rs:
+                    total.add(sim.request(build(opt, row, k), row["ts"], floor, cal.overhead, cal.scale))
+            out[app][opt] = total
     return dict(out)
 
 
@@ -208,28 +238,47 @@ class Verdict:
     price: float | None = None        # USD per million input tokens, if known
     calibration: Calibration = field(default_factory=Calibration)
     measured: Usage | None = None     # the provider's own counts for this log, if recorded
+    rules: Rules = field(default_factory=Rules)   # the provider's caching rules for this model
 
     @property
     def plan(self) -> BreakPlan:
         return self.plans.get(ONE_HOUR if self.recommended.endswith("_1h") else FIVE_MIN, NO_PLAN)
 
     def cost(self, opt: str) -> float:
-        return self.usage[opt].cost_units(self.read_x) / max(1, self.usage["off"].total)
+        return _units(self.usage[opt], self.rules) / max(1, self.usage["off"].total)
+
+    def label(self, opt: str) -> str:
+        """Option names in this provider's own terms."""
+        text = OPTIONS[opt][0].replace("5-minute", self.rules.name_short).replace("1-hour", self.rules.name_long)
+        if self.rules.mode == "implicit":
+            text = text.replace("Caching off", "Without caching (reference only)").replace("Prompt fix + breakpoints", "Prompt fix")
+        return text
 
     def read(self, opt: str) -> float:
         u = self.usage[opt]
         return u.cache_read_input_tokens / max(1, u.total)
 
     def dollars(self, opt: str) -> float | None:
-        return None if self.price is None else self.usage[opt].cost_units(self.read_x) * self.price / 1e6
+        return None if self.price is None else _units(self.usage[opt], self.rules) * self.price / 1e6
+
+    @property
+    def as_sent(self) -> str:
+        """The option that models the requests as they were logged."""
+        if "logged" in self.usage:
+            return "logged"
+        return "auto_5m" if self.rules.mode == "implicit" else "off"
 
     @property
     def measured_cost(self) -> float | None:
         m = self.measured
-        return None if m is None or not m.total else m.cost_units(self.read_x) / m.total
+        return None if m is None or not m.total else _units(m, self.rules) / m.total
 
 
-def _recommend(cost: dict[str, float]) -> tuple[str, str]:
+def _recommend(cost: dict[str, float], r: Rules | None = None) -> tuple[str, str]:
+    if r is not None and r.mode == "implicit":
+        if "auto_1h" in cost and cost["auto_1h"] < cost["auto_5m"] - 0.02:
+            return "auto_1h", "longer retention has no write fee and more of the prompt is still cached after pauses"
+        return "auto_5m", "caching is automatic on this model; nothing to configure"
     plain = [o for o in SIMPLICITY if o in cost]
     best = min(plain, key=lambda o: cost[o])
     if "logged" in cost and cost["logged"] < 0.97 and cost["logged"] <= cost[best] + 0.02:
@@ -249,9 +298,11 @@ def _layout(reusable: float, cost: dict[str, float], breaks: list[Break], fixabl
         return "changing content at the top of the prompt"
     if reusable < 0.15:
         return "little repeats between requests"
-    if cost["auto_5m"] <= cost["plan_5m"] + 0.03 and cost["auto_5m"] < 0.97:
+    auto = cost.get("auto_5m", cost.get("plan_5m", 1.0))
+    plan = cost.get("plan_5m", auto)
+    if auto <= plan + 0.03 and auto < 0.97:
         return "append-only conversation"
-    if any(b.kind == "inserted" for b in breaks) or cost["plan_5m"] < cost["auto_5m"] - 0.03:
+    if any(b.kind == "inserted" for b in breaks) or plan < auto - 0.03:
         return "content inserted or changed mid-prompt"
     return "mixed"
 
@@ -275,16 +326,21 @@ def examine(rows: list[dict], k: Knowledge | None = None, min_tokens: int | None
         if not fixable:
             u.pop("fix_5m", None), u.pop("fix_1h", None)
         base = max(1, u["off"].total)
-        cost = {o: x.cost_units(s.read_x) / base for o, x in u.items()}
-        pick, reason = _recommend(cost)
+        cost = {o: _units(x, s) / base for o, x in u.items()}
+        pick, reason = _recommend(cost, s)
         fix = None
         if fixable:
-            best_fix = min(("fix_5m", "fix_1h"), key=lambda o: cost[o])
+            best_fix = min((o for o in ("fix_5m", "fix_1h") if o in cost), key=lambda o: cost[o])
             if cost[best_fix] < cost[pick] - 0.05:
                 fix = best_fix
         gaps = [b["ts"] - a["ts"] for a, b in zip(rs, rs[1:])]
         breaks = find_breaks(app, rs)
-        reusable = reusable_share(rs)
+        reusable = reusable_share(rs, s.ttl_short)
+        if s.mode == "implicit":                           # these models reuse any shared prefix, not whole blocks
+            sim, seen = ImplicitSim(s.ttl_short, 1), Usage()
+            for r in rs:
+                seen.add(sim.request(strip_cache_control(r["request"]), r["ts"], 0, cal.overhead, cal.scale))
+            reusable = seen.cache_read_input_tokens / max(1, seen.total)
         sizes = sorted(round(_est(r["request"]) * cal.scale) + (cal.overhead if r["request"].get("tools") else 0)
                        for r in rs)
         measured = None
@@ -295,8 +351,8 @@ def examine(rows: list[dict], k: Knowledge | None = None, min_tokens: int | None
         out.append(Verdict(
             app, len(rs), u["off"].total, _layout(reusable, cost, breaks, fixable), reusable,
             statistics.median(gaps) if gaps else 0.0,
-            sum(g > FIVE_MIN for g in gaps) / len(gaps) if gaps else 0.0,
+            sum(g > s.ttl_short for g in gaps) / len(gaps) if gaps else 0.0,
             u, pick, reason, fix, k.plans.get(app) or {}, breaks, in_sample,
             k.floors[app], bool(min_tokens) or s.known, sizes[len(sizes) // 2], s.read_x,
-            price if price is not None else s.input_price, cal, measured))
+            price if price is not None else s.input_price, cal, measured, s))
     return sorted(out, key=lambda v: -v.tokens)

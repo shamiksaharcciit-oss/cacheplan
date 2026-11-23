@@ -19,6 +19,16 @@ BIG = "policy " * 2000
 
 
 # ------------------------------------------------------------------ fixtures
+def load_rows(rows):
+    """Rows as the log reader returns them, without touching the disk."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        p = f"{d}/bot.jsonl"
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("\n".join(json.dumps(r) for r in rows) + "\n")
+        return load(p).rows
+
+
 def _write(tmp_path, name, rows):
     p = tmp_path / name
     p.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
@@ -81,8 +91,8 @@ def test_reads_captures_raw_bodies_and_promptcachelint_traces(tmp_path):
         {"unrelated": True},
     ])
     log = load(path)
-    assert len(log.rows) == 3
-    assert sum(log.skipped.values()) == 2
+    assert len(log.rows) == 4 and {r["provider"] for r in log.rows} == {"anthropic", "openai"}
+    assert sum(log.skipped.values()) == 1
 
 
 def test_different_system_prompts_under_one_label_are_split(tmp_path):
@@ -553,3 +563,204 @@ def test_quality_verdict_needs_the_gap_to_exceed_its_uncertainty():
                    control_similarity=[0.7] * 15 + [0.6] * 15, fix_similarity=[0.4] * 15 + [0.35] * 15,
                    different=[{}] * 8, only_control_changed=0)
     assert "review before adopting" in worse.verdict
+
+
+# ------------------------------------------------------------------ other providers
+from cacheplan import providers
+from cacheplan.proxy import classify, usage_from_response
+from cacheplan.sim import ImplicitSim
+
+RULEBOOK = "You are a support agent.\n" + "\n".join(f"Rule {i}: answer politely and cite policy section {i * 7}." for i in range(400))
+
+
+def _turns(conversations=5, steps=5):
+    """(ts, turns so far) for append-only conversations."""
+    t = 0.0
+    for c in range(conversations):
+        turns = [("user", f"Question {c}: where is order {c * 17}? " + "detail " * 60)]
+        for s in range(steps):
+            yield t, c, s, list(turns)
+            turns += [("assistant", f"Answer {c}.{s} " + "words " * 150), ("user", f"Follow-up {c}.{s} " + "more " * 60)]
+            t += 20
+        t += 60
+
+
+def openai_chat(model="gpt-5.4", stamp=False):
+    return [{"ts": t, "app": "bot", "request": {"model": model, "messages": [
+        {"role": "system", "content": RULEBOOK + (f"\nCurrent time: 2026-11-23T10:{c:02d}:{s:02d}" if stamp else "")},
+        *({"role": r, "content": x} for r, x in turns)]}} for t, c, s, turns in _turns()]
+
+
+def converse(model="eu.anthropic.claude-sonnet-5-5-v1:0", cache_point=False):
+    system = [{"text": RULEBOOK}] + ([{"cachePoint": {"type": "default"}}] if cache_point else [])
+    return [{"ts": t, "app": "bot", "request": {"modelId": model, "system": system,
+             "messages": [{"role": r, "content": [{"text": x}]} for r, x in turns]}} for t, c, s, turns in _turns()]
+
+
+def test_request_formats_are_detected_and_converted():
+    chat = {"model": "gpt-5.4", "messages": [{"role": "system", "content": "S"}, {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "function": {"name": "f", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "c1", "content": "42"}],
+            "tools": [{"type": "function", "function": {"name": "f", "parameters": {}}}]}
+    provider, req = providers.normalise(chat)
+    assert provider == "openai" and system_text(req) == "S" and req["tools"][0]["name"] == "f"
+    assert [m["role"] for m in req["messages"]] == ["user", "assistant", "user"]
+    assert req["messages"][1]["content"][0]["type"] == "tool_use" and req["messages"][2]["content"][0]["type"] == "tool_result"
+
+    resp = {"model": "gpt-6.1-sol", "instructions": "S", "prompt_cache_options": {"mode": "explicit"},
+            "input": [{"role": "user", "content": [{"type": "input_text", "text": "hi", "prompt_cache_breakpoint": {}}]}]}
+    provider, req = providers.normalise(resp)
+    assert provider == "openai" and "cache_control" not in req
+    assert [bool(ttl) for _, ttl in prefix_blocks(req)] == [False, True]
+    # without explicit mode, GPT-5.6 and later cache automatically
+    assert providers.normalise(dict(resp, prompt_cache_options={}))[1]["cache_control"] == {"type": "ephemeral"}
+
+    conv = {"modelId": "anthropic.claude-sonnet-5-5", "system": [{"text": "S"}, {"cachePoint": {"type": "default", "ttl": "1h"}}],
+            "messages": [{"role": "user", "content": [{"text": "hi"}]}],
+            "toolConfig": {"tools": [{"toolSpec": {"name": "f", "inputSchema": {"json": {}}}}]}}
+    provider, req = providers.normalise(conv)
+    assert provider == "bedrock" and req["system"][0]["cache_control"]["ttl"] == "1h" and req["tools"][0]["name"] == "f"
+
+    gem = {"systemInstruction": {"parts": [{"text": "S"}]}, "contents": [{"role": "user", "parts": [{"text": "hi"}]},
+                                                                           {"role": "model", "parts": [{"text": "yo"}]}]}
+    provider, req = providers.normalise(gem)
+    assert provider == "gemini" and [m["role"] for m in req["messages"]] == ["user", "assistant"]
+    assert providers.detect({"model": "claude-sonnet-5-5", "messages": [{"role": "user", "content": "hi"}]}) == "anthropic"
+
+
+def test_caching_rules_per_provider_and_model():
+    old, new = providers.rules("openai", "gpt-5.4"), providers.rules("openai", "gpt-6.1-sol")
+    assert old.mode == "implicit" and old.write_short == 1.0 and old.read_x == pytest.approx(0.1)
+    assert new.mode == "breakpoints" and (new.write_short, new.write_long) == (1.25, 2.5)
+    assert (new.ttl_short, new.ttl_long) == (1800, 43200) and new.read_x == pytest.approx(0.05)
+    claude = providers.rules("bedrock", "eu.anthropic.claude-haiku-4-5-20251001-v1:0")
+    assert claude.minimum == 4096 and claude.forecast
+    nova = providers.rules("bedrock", "amazon.nova-pro-v1:0")
+    assert nova.write_long is None and not nova.automatic
+    assert not providers.rules("gemini", "gemini-3-flash").forecast
+    assert not providers.rules("bedrock", "meta.llama4").forecast
+
+
+def test_usage_is_read_in_every_providers_format():
+    assert providers.usage_parts({"inputTokens": 10, "cacheReadInputTokens": 90, "cacheWriteInputTokens": 5}) == (10, 5, 90, 0)
+    assert providers.usage_parts({"prompt_tokens": 100, "prompt_tokens_details": {"cached_tokens": 64}}) == (36, 0, 64, 0)
+    assert providers.usage_parts({"input_tokens": 100, "input_tokens_details": {
+        "cached_tokens": 50, "cache_write_tokens": 30, "cache_write_tokens_details": {"ttl_12h_tokens": 30}}}) == (20, 30, 50, 30)
+    assert providers.usage_parts({"promptTokenCount": 100, "cachedContentTokenCount": 40}) == (60, 0, 40, 0)
+    sse = b'data: {"type":"response.completed","response":{"usage":{"input_tokens":9,"input_tokens_details":{"cached_tokens":4}}}}\n\n'
+    assert usage_from_response(sse, "text/event-stream")["input_tokens"] == 9
+    chunks = b'data: {"choices":[{}]}\n\ndata: {"choices":[],"usage":{"prompt_tokens":7}}\n\ndata: [DONE]\n\n'
+    assert usage_from_response(chunks, "text/event-stream") == {"prompt_tokens": 7}
+    assert usage_from_response(b'{"usageMetadata":{"promptTokenCount":3}}', "application/json") == {"promptTokenCount": 3}
+
+
+def test_model_calls_are_recognised_by_path():
+    assert classify("POST", "/v1/messages?beta=true") == ("anthropic", None)
+    assert classify("POST", "/v1/chat/completions") == ("openai", None)
+    assert classify("POST", "/v1/responses") == ("openai", None)
+    assert classify("POST", "/v1beta/models/gemini-3-flash:streamGenerateContent?alt=sse") == ("gemini", "gemini-3-flash")
+    assert classify("POST", "/v1/embeddings") is None and classify("GET", "/v1/messages") is None
+
+
+def test_implicit_cache_reads_the_shared_prefix_in_steps():
+    sim = ImplicitSim(ttl=300, interval=128)
+    a = {"system": [{"type": "text", "text": "x" * 35000}], "messages": [{"role": "user", "content": "first question"}]}
+    b = {"system": a["system"], "messages": [{"role": "user", "content": "another one"}]}
+    first, second = sim.request(a, 0), sim.request(b, 10)
+    assert first.cache_read_input_tokens == 0 and first.cache_creation_input_tokens == 0      # no write fee
+    assert second.cache_read_input_tokens >= 9000 and second.cache_read_input_tokens % 128 == 0
+    assert sim.request(b, 1000).cache_read_input_tokens == 0                                  # expired
+    short = {"messages": [{"role": "user", "content": "x" * 1000}]}
+    sim.request(short, 2000)
+    assert sim.request(short, 2001).cache_read_input_tokens == 0                              # under the minimum
+
+
+def test_openai_automatic_models_get_a_forecast_without_breakpoint_options():
+    v = examine(load_rows(openai_chat()))[0]
+    assert v.rules.provider == "openai" and v.rules.mode == "implicit" and v.app.endswith("[openai]")
+    assert "plan_5m" not in v.usage and v.cost("auto_5m") < 0.3 and v.recommended.startswith("auto")
+    assert not any(f.rule == "CP003" for f in findings(v, load_rows(openai_chat()), learn_from(load_rows(openai_chat()))))
+    stamped = load_rows(openai_chat(stamp=True))
+    k = learn_from(stamped)
+    w = examine(stamped, k)[0]
+    assert any(f.rule == "CP001" for f in findings(w, stamped, k)) and w.fix_option and w.cost(w.fix_option) < w.cost("auto_5m")
+
+
+def test_openai_breakpoint_models_use_their_own_lifetimes_and_write_prices():
+    v = examine(load_rows(openai_chat("gpt-6.1-sol")))[0]
+    assert v.rules.mode == "breakpoints" and "logged" in v.usage          # automatic unless the request says otherwise
+    assert v.label("plan_1h") == "Planned breakpoints, 12-hour"
+    u = v.usage["auto_1h"]
+    assert v.cost("auto_1h") == pytest.approx(
+        (u.input_tokens + 2.5 * u.cache_creation_input_tokens + v.rules.read_x * u.cache_read_input_tokens) / v.usage["off"].total)
+
+
+def test_bedrock_claude_is_forecast_like_anthropic_and_cache_points_are_read():
+    v = examine(load_rows(converse()))[0]
+    assert v.rules.provider == "bedrock" and v.minimum == 512 and v.cost(v.recommended) < 0.3
+    assert "logged" not in v.usage
+    marked = examine(load_rows(converse(cache_point=True)))[0]
+    assert "logged" in marked.usage and marked.usage["logged"].cache_read_input_tokens > 0
+
+
+def test_nova_has_no_long_lifetime_and_gemini_has_no_forecast(tmp_path, capsys):
+    nova = examine(load_rows(converse("amazon.nova-pro-v1:0")))[0]
+    assert set(nova.usage) == {"off", "plan_5m"}
+    gem = [{"ts": r["ts"], "app": "bot", "model": "gemini-3-flash", "request": {
+        "systemInstruction": {"parts": [{"text": r["request"]["messages"][0]["content"]}]},
+        "contents": [{"role": "model" if m["role"] == "assistant" else "user", "parts": [{"text": m["content"]}]}
+                     for m in r["request"]["messages"][1:]]}} for r in openai_chat(stamp=True)]
+    path = _write(tmp_path, "gem.jsonl", gem)
+    assert cli.main(["report", path]) == 0
+    out = capsys.readouterr().out
+    assert "No cost forecast" in out and "CP001" in out and "Cost vs no caching" not in out
+    assert cli.main(["report", path, "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["applications"][0]["options"] == {}
+
+
+def test_forecast_check_uses_openai_usage(tmp_path, capsys):
+    rows = openai_chat()
+    sim = ImplicitSim(300, 128)
+    for r, loaded in zip(rows, load_rows(rows)):
+        u = sim.request(loaded["request"], r["ts"], 1024)
+        r["usage"] = {"prompt_tokens": u.total, "prompt_tokens_details": {"cached_tokens": u.cache_read_input_tokens}}
+    assert cli.main(["report", _write(tmp_path, "oa.jsonl", rows)]) == 0
+    assert "Forecast check" in capsys.readouterr().out
+
+
+def test_live_commands_refuse_other_providers(tmp_path):
+    path = _write(tmp_path, "oa.jsonl", openai_chat())
+    with pytest.raises(SystemExit, match="Anthropic API logs only"):
+        cli.main(["verify", path, "--model", "claude-sonnet-5-5"])
+    with pytest.raises(SystemExit, match="record_bedrock"):
+        cli.main(["capture", "--out", str(tmp_path / "x.jsonl"), "--provider", "bedrock"])
+
+
+def test_bedrock_recorder_writes_request_and_usage(tmp_path):
+    class Events:
+        def __init__(self):
+            self.handlers = {}
+
+        def register(self, name, fn):
+            self.handlers[name] = fn
+
+    class Client:
+        def __init__(self):
+            self.meta = type("M", (), {"events": Events()})()
+
+    from cacheplan.record import record_bedrock
+    out = tmp_path / "b.jsonl"
+    c = record_bedrock(Client(), str(out), app="bot")
+    params = converse()[0]["request"]
+    h = c.meta.events.handlers
+    h["provide-client-params.bedrock-runtime.Converse"](params=params)
+    h["after-call.bedrock-runtime.Converse"](parsed={"ResponseMetadata": {"HTTPStatusCode": 200},
+                                                    "usage": {"inputTokens": 12, "cacheReadInputTokens": 0}})
+    h["provide-client-params.bedrock-runtime.ConverseStream"](params=params)
+    parsed = {"ResponseMetadata": {"HTTPStatusCode": 200},
+              "stream": iter([{"contentBlockDelta": {}}, {"metadata": {"usage": {"inputTokens": 5}}}])}
+    h["after-call.bedrock-runtime.ConverseStream"](parsed=parsed)
+    assert len(list(parsed["stream"])) == 2
+    log = load(str(out))
+    assert [r["provider"] for r in log.rows] == ["bedrock", "bedrock"]
+    assert [r["usage"]["inputTokens"] for r in log.rows] == [12, 5]

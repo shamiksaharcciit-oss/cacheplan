@@ -5,8 +5,9 @@ Accepted line formats (JSONL, one request per line, formats may be mixed):
   raw request body      {"model": ..., "system": ..., "messages": [...]}
   promptcachelint trace {"provider": "anthropic", "body": {...}, "at": ..., "usage": {...}}
 
-Only Anthropic Messages API requests are analysed in this release; other lines are
-counted and skipped.
+Requests in OpenAI (Chat Completions, Responses), Bedrock Converse and Gemini
+generateContent formats are recognised and converted; see providers.py for what is
+forecast for each.
 """
 from __future__ import annotations
 
@@ -25,23 +26,30 @@ class Log:
 
 
 def _row(d: dict, default_app: str, n: int) -> dict | str:
+    from .providers import normalise
     if not isinstance(d, dict):
         return "not a JSON object"
-    usage = None
+    usage, provider, model = None, None, None
     if isinstance(d.get("request"), dict):
         req, ts, app, session, usage = d["request"], d.get("ts"), d.get("app"), d.get("session"), d.get("usage")
+        provider, model = d.get("provider"), d.get("model")
     elif isinstance(d.get("body"), dict):                       # promptcachelint trace
-        if d.get("provider") not in (None, "anthropic"):
-            return f"provider {d.get('provider')} not supported yet"
         req, ts, app, session, usage = d["body"], d.get("at"), None, d.get("session_id"), d.get("usage")
-    elif "messages" in d:
+        provider, model = d.get("provider"), d.get("model")
+    elif any(k in d for k in ("messages", "input", "contents")):
         req, ts, app, session = d, None, None, None
     else:
         return "no request found"
-    if not isinstance(req.get("messages"), list) or "input" in req:
-        return "not an Anthropic Messages request"
+    try:
+        provider, req = normalise(req, provider)
+    except (AttributeError, TypeError, KeyError):
+        return "request could not be read"
+    if not isinstance(req.get("messages"), list):
+        return "no messages in the request"
+    if model and not req.get("model"):
+        req = dict(req, model=model)
     return {"ts": float(ts) if ts else float(n), "app": app or default_app, "session": session,
-            "request": req, "usage": usage}
+            "request": req, "usage": usage, "provider": provider}
 
 
 def _lines(text: str) -> set[str]:
@@ -66,6 +74,8 @@ def load(paths) -> Log:
                 skipped[row] += 1
                 continue
             row["_src"] = src
+            if row["provider"] != "anthropic" and not row["app"].endswith(f"[{row['provider']}]"):
+                row["app"] = f"{row['app']} [{row['provider']}]"
             log.rows.append(row)
     log.rows.sort(key=lambda r: (r["_src"], r["ts"]))
     clusters: dict[str, list[set]] = defaultdict(list)
@@ -101,13 +111,10 @@ def conversation_key(row: dict) -> str:
 
 
 def real_usage(row: dict):
-    """The provider's own token counts for a logged request, if the log has them.
-    Accepts Anthropic usage objects and promptcachelint's field names."""
+    """The provider's own token counts for a logged request, if the log has them."""
+    from .providers import usage_parts
     from .sim import Usage
-    u = row.get("usage")
-    if not isinstance(u, dict) or u.get("input_tokens") is None:
+    parts = usage_parts(row.get("usage"))
+    if parts is None:
         return None
-    creation = u.get("cache_creation_input_tokens", u.get("cache_write")) or 0
-    read = u.get("cache_read_input_tokens", u.get("cache_read")) or 0
-    one_hour = (u.get("cache_creation") or {}).get("ephemeral_1h_input_tokens") or 0
-    return Usage(int(u["input_tokens"]), int(creation), int(read), int(one_hour))
+    return Usage(max(0, parts[0]), parts[1], parts[2], parts[3])

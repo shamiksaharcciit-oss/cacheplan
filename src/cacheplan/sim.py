@@ -36,16 +36,19 @@ class Usage:
         self.cache_read_input_tokens += o.cache_read_input_tokens
         self.cache_creation_1h_tokens += o.cache_creation_1h_tokens
 
-    def cost_units(self, read_x: float = READ) -> float:
-        """Cost in units of one ordinary input token. read_x is model-specific."""
-        w1h = self.cache_creation_1h_tokens
-        w5m = self.cache_creation_input_tokens - w1h
-        return self.input_tokens + w5m * WRITE_5M + w1h * WRITE_1H + self.cache_read_input_tokens * read_x
+    def cost_units(self, read_x: float = READ, write_short: float = WRITE_5M, write_long: float | None = WRITE_1H) -> float:
+        """Cost in units of one ordinary input token. The multipliers are model-specific."""
+        long = self.cache_creation_1h_tokens
+        short = self.cache_creation_input_tokens - long
+        return (self.input_tokens + short * write_short + long * (write_long or write_short)
+                + self.cache_read_input_tokens * read_x)
 
 
 class CacheSim:
-    def __init__(self, min_tokens: int = 1024):
-        self.min_tokens = min_tokens
+    def __init__(self, min_tokens: int = 1024, ttl_short: int = 300, ttl_long: int = 3600):
+        """ttl_short / ttl_long: seconds an entry lives for the two marker kinds
+        (5 minutes and 1 hour on Anthropic; 30 minutes and 12 hours on newer OpenAI models)."""
+        self.min_tokens, self.ttl_short, self.ttl_long = min_tokens, ttl_short, ttl_long
         self.entries: dict[bytes, tuple[float, int]] = {}     # prefix hash -> (expiry, lifetime)
 
     def request(self, req: dict, now: float, min_tokens: int | None = None,
@@ -62,7 +65,8 @@ class CacheSim:
             total += est_tokens(text) * scale
             hashes.append(h)
             cum.append(total)
-        bps = [(i, ttl) for i, (_, ttl) in enumerate(blocks) if ttl and cum[i] >= floor]
+        bps = [(i, self.ttl_long if ttl >= ONE_HOUR else self.ttl_short)
+               for i, (_, ttl) in enumerate(blocks) if ttl and cum[i] >= floor]
         if not bps:
             return Usage(input_tokens=round(total))
         read = -1
@@ -82,5 +86,34 @@ class CacheSim:
         end = max(bps[-1][0], read)
         r = round(cum[read]) if read >= 0 else 0
         w = round(cum[end]) - r
-        long_lived = bool(written) and written[-1][1] >= ONE_HOUR
+        long_lived = bool(written) and written[-1][1] == self.ttl_long and self.ttl_long != self.ttl_short
         return Usage(round(total) - round(cum[end]), w, r, w if long_lived else 0)
+
+
+class ImplicitSim:
+    """Automatic prefix caching without markers or write charges (OpenAI models before
+    GPT-5.6). A request reads the longest prefix it shares with any request seen within
+    the lifetime, rounded down to the model's boundary interval, if it reaches the minimum."""
+
+    def __init__(self, ttl: float, interval: int = 128, keep: int = 200):
+        self.ttl, self.interval, self.keep = ttl, max(1, interval), keep
+        self.seen: list[tuple[float, str]] = []
+
+    def request(self, req: dict, now: float, min_tokens: int = 1024, overhead: int = 0, scale: float = 1.0) -> Usage:
+        import os
+        text = "\x00".join(t for t, _ in prefix_blocks(req))
+        total = round(est_tokens(text) * scale) + (overhead if req.get("tools") else 0)
+        best = 0
+        for i, (ts, prev) in enumerate(self.seen):
+            if now - ts > self.ttl:
+                continue
+            n = len(os.path.commonprefix([prev, text]))
+            if n > best:
+                best = n
+                self.seen[i] = (now, prev)                 # a read keeps the entry alive
+        self.seen = [(ts, t) for ts, t in self.seen if now - ts <= self.ttl][-self.keep:] + [(now, text)]
+        cached = round(est_tokens(text[:best]) * scale) if best else 0
+        cached -= cached % self.interval
+        if cached < min_tokens:
+            cached = 0
+        return Usage(total - cached, 0, min(cached, total))
