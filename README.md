@@ -245,7 +245,10 @@ What to know before relying on the non-Anthropic rows:
 
 - **Only one of them has been compared with a live API, once.** On 23 November 2026 a
   15-request append-only run on `gpt-5.4-mini` (`benchmarks/providers/openai_driver.py`) was
-  forecast at 19% of the uncached input cost and billed at 21%. The other rows are untested.
+  forecast at 19% of the uncached input cost and billed at 21%. A second run with a
+  timestamp in the system prompt was forecast at 23% and billed at 17%; the cache was still
+  warm from the first run, which accounts for the gap (15 reads instead of the 14 a cold
+  start gives). The other rows are untested.
   The rules were read from each provider's documentation on the same day. If your log has recorded usage,
   the report's forecast check tells you how well the model holds on your own traffic; treat
   the forecast as unconfirmed until you have seen that line.

@@ -764,3 +764,11 @@ def test_bedrock_recorder_writes_request_and_usage(tmp_path):
     log = load(str(out))
     assert [r["provider"] for r in log.rows] == ["bedrock", "bedrock"]
     assert [r["usage"]["inputTokens"] for r in log.rows] == [12, 5]
+
+
+def test_forecast_check_says_when_the_cache_was_warm_before_the_log(tmp_path, capsys):
+    rows = openai_chat()
+    for r in rows:
+        r["usage"] = {"prompt_tokens": 4000, "prompt_tokens_details": {"cached_tokens": 3200}}
+    assert cli.main(["report", _write(tmp_path, "warm.jsonl", rows)]) == 0
+    assert "warm from traffic before this log" in capsys.readouterr().out

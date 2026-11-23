@@ -239,6 +239,7 @@ class Verdict:
     calibration: Calibration = field(default_factory=Calibration)
     measured: Usage | None = None     # the provider's own counts for this log, if recorded
     rules: Rules = field(default_factory=Rules)   # the provider's caching rules for this model
+    warm_start: bool = False          # the first logged request already read from the cache
 
     @property
     def plan(self) -> BreakPlan:
@@ -354,5 +355,6 @@ def examine(rows: list[dict], k: Knowledge | None = None, min_tokens: int | None
             sum(g > s.ttl_short for g in gaps) / len(gaps) if gaps else 0.0,
             u, pick, reason, fix, k.plans.get(app) or {}, breaks, in_sample,
             k.floors[app], bool(min_tokens) or s.known, sizes[len(sizes) // 2], s.read_x,
-            price if price is not None else s.input_price, cal, measured, s))
+            price if price is not None else s.input_price, cal, measured, s,
+            bool(real_usage(rs[0]) and real_usage(rs[0]).cache_read_input_tokens)))
     return sorted(out, key=lambda v: -v.tokens)
