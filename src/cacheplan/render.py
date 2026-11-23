@@ -43,9 +43,30 @@ def _advice(v: Verdict) -> list[str]:
     return lines
 
 
+def _money(x: float | None) -> str:
+    return "" if x is None else (f"${x:,.2f}" if x >= 1 else f"${x:.4f}")
+
+
+def _token_source(v: Verdict) -> str:
+    c = v.calibration
+    if c.responses:
+        return f"calibrated on {c.responses} recorded responses"
+    return "estimated from characters; record responses for real counts"
+
+
+def _check(v: Verdict) -> str | None:
+    """Compare the forecast for the logged settings with what the provider actually reported."""
+    if v.measured is None or "logged" not in v.usage and v.measured.cache_creation_input_tokens + v.measured.cache_read_input_tokens:
+        return None
+    opt = "logged" if "logged" in v.usage else "off"
+    return (f"Forecast check: this log's own settings were forecast at {v.cost(opt):.0%} and the recorded "
+            f"responses show {v.measured_cost:.0%} (read {v.measured.cache_read_input_tokens / max(1, v.measured.total):.0%}).")
+
+
 def text(v: Verdict, fs: list[Finding], name_width: int = 36) -> str:
+    money = v.price is not None
     out = [f"{v.app}",
-           f"  {v.requests} requests, ~{v.tokens:,} input tokens (estimate)",
+           f"  {v.requests} requests, ~{v.tokens:,} input tokens ({_token_source(v)})",
            f"  Layout     {v.layout}",
            f"  Reusable   {v.reusable:.0%} of input tokens repeat an earlier prefix as written",
            f"  Pace       median {v.median_gap:.0f} s between requests; {v.gaps_over_5m:.0%} of pauses over 5 minutes",
@@ -53,15 +74,21 @@ def text(v: Verdict, fs: list[Finding], name_width: int = 36) -> str:
            + ("" if v.minimum_known else " (model not recognised: default used, set --model or --min-tokens)")
            + f"; typical prompt ~{v.typical_tokens:,}",
            "",
-           f"  {'Option':<{name_width}} {'Read':>5}  {'Cost vs no caching':>18}"]
+           f"  {'Option':<{name_width}} {'Read':>5}  {'Cost vs no caching':>18}" + (f"  {'This log':>10}" if money else "")]
     for opt in OPTIONS:
         if opt in v.usage:
             mark = "  <- recommended" if opt == v.recommended else ""
-            out.append(f"  {OPTIONS[opt][0]:<{name_width}} {v.read(opt):>5.0%}  {v.cost(opt):>18.0%}{mark}")
+            cash = f"  {_money(v.dollars(opt)):>10}" if money else ""
+            out.append(f"  {OPTIONS[opt][0]:<{name_width}} {v.read(opt):>5.0%}  {v.cost(opt):>18.0%}{cash}{mark}")
+    if money:
+        out.append(f"  (input tokens at ${v.price:g} per million; cache reads at {v.read_x:g}x)")
     out += [""] + ["  " + l for l in _advice(v)]
-    if v.in_sample and v.recommended.startswith(("plan", "fix")) or (v.in_sample and v.fix_option):
-        out.append("  Note: the plan was learned from this same log; use --learn-from for an out-of-sample forecast.")
-    if 0.5 * v.minimum <= v.typical_tokens <= 2 * v.minimum:
+    check = _check(v)
+    if check:
+        out.append("  " + check)
+    if v.in_sample and (v.recommended.startswith(("plan", "fix")) or v.fix_option):
+        out.append("  Note: the plan was chosen on this same log; use --learn-from for an out-of-sample forecast.")
+    if not v.calibration.responses and 0.5 * v.minimum <= v.typical_tokens <= 2 * v.minimum:
         out.append("  Note: prompts are close to the minimum cacheable length, where token estimates decide "
                    "what is cached. Treat this forecast as rough and run `cacheplan verify`.")
     if fs:
@@ -76,11 +103,68 @@ def as_dict(v: Verdict, fs: list[Finding]) -> dict:
         "gaps_over_5m": round(v.gaps_over_5m, 4),
         "minimum_cacheable_tokens": v.minimum, "minimum_known": v.minimum_known,
         "typical_prompt_tokens_estimate": v.typical_tokens,
+        "token_calibration": {"scale": round(v.calibration.scale, 4), "tool_overhead": v.calibration.overhead,
+                              "responses": v.calibration.responses},
+        "cache_read_multiplier": v.read_x, "input_price_per_million": v.price,
+        "measured_cost_vs_no_caching": None if v.measured_cost is None else round(v.measured_cost, 4),
         "options": {o: {"label": OPTIONS[o][0], "read_share": round(v.read(o), 4),
-                        "cost_vs_no_caching": round(v.cost(o), 4)} for o in OPTIONS if o in v.usage},
+                        "cost_vs_no_caching": round(v.cost(o), 4),
+                        "cost_usd": None if v.dollars(o) is None else round(v.dollars(o), 6)}
+                    for o in OPTIONS if o in v.usage},
         "recommended": v.recommended, "reason": v.reason, "prompt_fix_option": v.fix_option,
         "plan": {"head": v.plan.head, "constant_prefix_blocks": v.plan.const_prefix,
                  "offsets_from_end": list(v.plan.offsets)},
+        "plans": {str(ttl): {"head": p.head, "constant_prefix_blocks": p.const_prefix,
+                             "offsets_from_end": list(p.offsets)} for ttl, p in v.plans.items()},
         "plan_learned_in_sample": v.in_sample,
         "findings": [{"rule": f.rule, "message": f.message, "fix": f.fix, "tokens": f.tokens} for f in fs],
     }
+
+
+def html(results: list[tuple[Verdict, list[Finding]]], version: str) -> str:
+    """A self-contained HTML report: no scripts, no external resources."""
+    import html as h
+    css = """
+    :root{--bg:#fcfcfb;--fg:#0b0b0b;--sec:#52514e;--line:#e3e2dd;--bar:#2a78d6;--warn:#eb6834;--card:#fff}
+    @media (prefers-color-scheme: dark){:root{--bg:#1a1a19;--fg:#f0efec;--sec:#c3c2b7;--line:#3a3a37;--bar:#3987e5;--warn:#d95926;--card:#242422}}
+    body{background:var(--bg);color:var(--fg);font:15px/1.5 -apple-system,Segoe UI,Helvetica,Arial,sans-serif;max-width:920px;margin:32px auto;padding:0 16px}
+    h1{font-size:26px;margin:0 0 4px} h2{font-size:19px;margin:0 0 6px} .sec{color:var(--sec)}
+    .app{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:20px 22px;margin:18px 0}
+    table{border-collapse:collapse;width:100%;margin:12px 0} th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);font-size:14px;vertical-align:middle}
+    th{color:var(--sec);font-weight:600} td.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+    .track{position:relative;height:14px;min-width:160px;background:transparent;border-left:1px solid var(--line)}
+    .fill{height:14px;border-radius:0 4px 4px 0;background:var(--bar)} .fill.over{background:var(--warn)}
+    .ref{position:absolute;top:-3px;bottom:-3px;width:0;border-left:2px dashed var(--sec);left:74%}
+    tr.rec td{font-weight:650} .pill{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:1px 8px;margin-left:6px;color:var(--sec)}
+    .advice{border-left:4px solid var(--bar);padding:8px 12px;margin:12px 0;background:var(--bg)}
+    code{font-family:ui-monospace,Consolas,monospace;font-size:13px} li{margin:6px 0}
+    """
+    parts = [f"<!doctype html><html lang='en'><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+             f"<title>cacheplan report</title><style>{css}</style><h1>Prompt caching report</h1>"
+             f"<p class='sec'>cacheplan {h.escape(version)} · forecasts come from a local model of the provider's caching "
+             "rules. Cost is input cost relative to the same requests without caching; the dashed line marks 100%.</p>"]
+    for v, fs in results:
+        rows = []
+        for opt in OPTIONS:
+            if opt not in v.usage:
+                continue
+            c = v.cost(opt)
+            width = min(100.0, c * 74)                      # 100% of cost sits at 74% of the track
+            cash = f"<td class='n'>{_money(v.dollars(opt))}</td>" if v.price is not None else ""
+            rec = " class='rec'" if opt == v.recommended else ""
+            pill = "<span class='pill'>recommended</span>" if opt == v.recommended else ""
+            rows.append(f"<tr{rec}><td>{h.escape(OPTIONS[opt][0])}{pill}</td><td class='n'>{v.read(opt):.0%}</td>"
+                        f"<td class='n'>{c:.0%}</td>{cash}<td><div class='track'><div class='fill{' over' if c > 1.005 else ''}' "
+                        f"style='width:{width:.1f}%'></div><div class='ref'></div></div></td></tr>")
+        cash_h = "<th class='n'>This log</th>" if v.price is not None else ""
+        notes = [l for l in (_check(v),) if l]
+        findings_html = "".join(f"<li><code>{f.rule}</code> {h.escape(f.message)}<br><span class='sec'>Fix: {h.escape(f.fix)}</span></li>"
+                                for f in fs)
+        parts.append(
+            f"<section class='app'><h2>{h.escape(v.app)}</h2>"
+            f"<div class='sec'>{v.requests} requests · ~{v.tokens:,} input tokens ({h.escape(_token_source(v))}) · "
+            f"layout: {h.escape(v.layout)} · {v.reusable:.0%} reusable as written · median pause {v.median_gap:.0f} s</div>"
+            f"<table><tr><th>Option</th><th class='n'>Read</th><th class='n'>Cost vs no caching</th>{cash_h}<th></th></tr>{''.join(rows)}</table>"
+            f"<div class='advice'>{'<br>'.join(h.escape(l) for l in _advice(v) + notes)}</div>"
+            + (f"<h3>Findings</h3><ul>{findings_html}</ul>" if fs else "") + "</section>")
+    return "".join(parts) + "</html>"

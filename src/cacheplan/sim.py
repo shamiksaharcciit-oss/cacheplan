@@ -36,11 +36,11 @@ class Usage:
         self.cache_read_input_tokens += o.cache_read_input_tokens
         self.cache_creation_1h_tokens += o.cache_creation_1h_tokens
 
-    def cost_units(self) -> float:
-        """Cost in units of one ordinary input token."""
+    def cost_units(self, read_x: float = READ) -> float:
+        """Cost in units of one ordinary input token. read_x is model-specific."""
         w1h = self.cache_creation_1h_tokens
         w5m = self.cache_creation_input_tokens - w1h
-        return self.input_tokens + w5m * WRITE_5M + w1h * WRITE_1H + self.cache_read_input_tokens * READ
+        return self.input_tokens + w5m * WRITE_5M + w1h * WRITE_1H + self.cache_read_input_tokens * read_x
 
 
 class CacheSim:
@@ -48,19 +48,23 @@ class CacheSim:
         self.min_tokens = min_tokens
         self.entries: dict[bytes, tuple[float, int]] = {}     # prefix hash -> (expiry, lifetime)
 
-    def request(self, req: dict, now: float, min_tokens: int | None = None) -> Usage:
+    def request(self, req: dict, now: float, min_tokens: int | None = None,
+                overhead: int | None = None, scale: float = 1.0) -> Usage:
+        """overhead: tokens the API adds when tools are defined; scale: correction applied
+        to the character-based token estimate (1.0 = uncalibrated)."""
         floor = self.min_tokens if min_tokens is None else min_tokens
+        extra = TOOL_USE_OVERHEAD if overhead is None else overhead
         blocks = prefix_blocks(req)
         h, hashes, cum = b"", [], []
-        total = TOOL_USE_OVERHEAD if req.get("tools") else 0     # hidden tool-use instructions
+        total = extra if req.get("tools") else 0               # hidden tool-use instructions
         for text, _ in blocks:
             h = hashlib.blake2b(h + text.encode(), digest_size=12).digest()
-            total += est_tokens(text)
+            total += est_tokens(text) * scale
             hashes.append(h)
             cum.append(total)
         bps = [(i, ttl) for i, (_, ttl) in enumerate(blocks) if ttl and cum[i] >= floor]
         if not bps:
-            return Usage(input_tokens=total)
+            return Usage(input_tokens=round(total))
         read = -1
         for bp, _ in reversed(bps):
             for j in range(bp, max(-1, bp - LOOKBACK - 1), -1):
@@ -76,7 +80,7 @@ class CacheSim:
         for bp, ttl in written:
             self.entries[hashes[bp]] = (now + ttl, ttl)
         end = max(bps[-1][0], read)
-        r = cum[read] if read >= 0 else 0
-        w = cum[end] - r
+        r = round(cum[read]) if read >= 0 else 0
+        w = round(cum[end]) - r
         long_lived = bool(written) and written[-1][1] >= ONE_HOUR
-        return Usage(total - cum[end], w, r, w if long_lived else 0)
+        return Usage(round(total) - round(cum[end]), w, r, w if long_lived else 0)

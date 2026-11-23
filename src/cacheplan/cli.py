@@ -11,8 +11,7 @@ from .diagnose import find_breaks, summarise
 from .findings import RULES, findings
 from .forecast import OPTIONS, Knowledge, examine, learn_from, simulate
 from .logs import by_app, load
-from .messages import est_tokens, prefix_blocks
-from .render import as_dict, text
+from .render import as_dict, html, text
 
 
 def _load(args) -> tuple[list[dict], Knowledge | None]:
@@ -26,14 +25,16 @@ def _load(args) -> tuple[list[dict], Knowledge | None]:
     if learn_path:
         train = [r for r in log.rows if r["_src"] == 0]
         rows = [r for r in log.rows if r["_src"] > 0]
-        return rows, learn_from(train)
+        return rows, learn_from(train, getattr(args, "min_tokens", None), getattr(args, "model", None))
     return log.rows, None
 
 
 def cmd_report(a) -> int:
     rows, k = _load(a)
-    verdicts = examine(rows, k, a.min_tokens, a.model)
-    k = k or learn_from(rows)
+    k = k or learn_from(rows, a.min_tokens, a.model)
+    verdicts = examine(rows, k, a.min_tokens, a.model, a.price)
+    for v in verdicts:
+        v.in_sample = not getattr(a, "learn_from", None)
     apps = by_app(rows)
     results = [(v, findings(v, apps[v.app], k, not a.no_content)) for v in verdicts]
     if a.json:
@@ -45,6 +46,10 @@ def cmd_report(a) -> int:
         print("\n\n".join(text(v, f) for v, f in shown))
         if len(shown) < len(results):
             print(f"\n{len(results) - len(shown)} application(s) with fewer than 3 requests not shown (use --json for all).")
+    if a.html:
+        with open(a.html, "w", encoding="utf-8") as f:
+            f.write(html(results, __version__))
+        print(f"\nwrote {a.html}", file=sys.stderr)
     fail = set(filter(None, (a.fail_on or "").split(",")))
     hit = sorted({f.rule for _, fs in results for f in fs} & fail)
     if hit:
@@ -84,17 +89,20 @@ def cmd_check(a) -> int:
 
 
 def cmd_gaps(a) -> int:
+    from .forecast import _fill
     rows, k = _load(a)
-    k = k or learn_from(rows)
+    k = k or learn_from(rows, a.min_tokens, a.model)
+    _fill(k, rows, a.min_tokens, a.model)
     opts = ["off", "auto_5m", "auto_1h", "plan_5m", "plan_1h"]
     t0 = rows[0]["ts"]
-    print("Forecast cost vs no caching as the time between requests grows (local model)\n")
+    print("Forecast cost vs no caching as the time between requests grows (local model).\n"
+          "The breakpoint plan is the one chosen for the pace in the log.\n")
     print("| Pauses scaled by | Median pause | " + " | ".join(OPTIONS[o][0] for o in opts[1:]) + " |")
     print("| --- | --- |" + " --- |" * (len(opts) - 1))
     for scale in [float(x) for x in a.scales.split(",")]:
         scaled = [dict(r, ts=t0 + (r["ts"] - t0) * scale) for r in rows]
-        res = simulate(scaled, k, opts, a.min_tokens, a.model)
-        tot = {o: sum(per[o].cost_units() for per in res.values()) for o in opts}
+        res = simulate(scaled, k, opts)
+        tot = {o: sum(per[o].cost_units(k.specs[app].read_x) for app, per in res.items()) for o in opts}
         base = sum(per["off"].total for per in res.values())
         d = [y["ts"] - x["ts"] for x, y in zip(scaled, scaled[1:])] or [0]
         print(f"| {scale:g}x | {statistics.median(d):.0f} s | " + " | ".join(f"{tot[o] / base:.0%}" for o in opts[1:]) + " |")
@@ -103,35 +111,77 @@ def cmd_gaps(a) -> int:
 
 def cmd_verify(a) -> int:
     from . import live
+    from .models import spec
     rows, k = _load(a)
     if a.limit:
         rows = rows[:a.limit]
+    k = k or learn_from(rows, a.min_tokens, a.model)
     verdicts = examine(rows, k, a.min_tokens, a.model)
-    k = k or learn_from(rows)
     wanted = ["auto_5m"] + sorted({v.recommended for v in verdicts} | {v.fix_option for v in verdicts if v.fix_option})
     if a.options:
         wanted = a.options.split(",")
     options = [o for o in dict.fromkeys(wanted) if o in OPTIONS and o != "off"]
-    est = sum(est_tokens(t) for r in rows for t, _ in prefix_blocks(r["request"]))
+    est = sum(v.tokens for v in verdicts)
     print(f"Live run: {len(rows)} requests x {len(options)} option(s) ({', '.join(options)}), "
           f"about {est * len(options):,} input tokens in total (estimate), max_tokens=1.")
     if not a.yes:
         print("Add --yes to send them.")
         return 2
     measured = live.run(rows, k, options, a.model)
-    forecast = simulate(rows, k, ["off"] + options, a.min_tokens, a.model)
+    forecast = simulate(rows, k, ["off"] + options)
+    read_x = spec(a.model).read_x
     print(f"\n{'Application':<34} {'Option':<36} {'Forecast':>9} {'Measured':>9} {'Read':>6}")
     for app, per in measured.items():
         base = per["off"].total
         fbase = max(1, forecast[app]["off"].total)
         for o in options:
             u = per[o]
-            print(f"{app[:34]:<34} {OPTIONS[o][0]:<36} {forecast[app][o].cost_units() / fbase:>9.0%} "
-                  f"{u.cost_units() / base:>9.0%} {u.cache_read_input_tokens / max(1, u.total):>6.0%}")
+            print(f"{app[:34]:<34} {OPTIONS[o][0]:<36} {forecast[app][o].cost_units(read_x) / fbase:>9.0%} "
+                  f"{u.cost_units(read_x) / base:>9.0%} {u.cache_read_input_tokens / max(1, u.total):>6.0%}")
+    print(f"\nCache reads are priced at {read_x:g}x an input token for this model.")
     if a.out:
         with open(a.out, "w", encoding="utf-8") as f:
             json.dump({app: {o: vars(u) for o, u in per.items()} for app, per in measured.items()}, f, indent=1)
     return 0
+
+
+def cmd_quality(a) -> int:
+    from . import quality
+    rows, k = _load(a)
+    k = k or learn_from(rows, a.min_tokens, None)
+    print(f"Quality check: up to {a.sample} requests per application, three calls each "
+          f"(as written twice, then with the prompt fix), max_tokens={a.max_tokens}. This spends output tokens.")
+    if not a.yes:
+        print("Add --yes to send them.")
+        return 2
+    results = quality.run(rows, k, a.model, a.sample, a.max_tokens)
+    print("\n" + quality.text(results))
+    return 1 if any("review" in r.verdict for r in results) else 0
+
+
+def cmd_baseline(a) -> int:
+    """Save or compare a content-free summary of a log, for regression checks in pipelines."""
+    rows, k = _load(a)
+    current = {v.app: {"reusable": round(v.reusable, 4), "best_cost": round(min(v.cost(o) for o in v.usage), 4)}
+               for v in examine(rows, k, a.min_tokens, a.model)}
+    if a.save:
+        with open(a.save, "w", encoding="utf-8") as f:
+            json.dump({"cacheplan": __version__, "applications": current}, f, indent=1)
+        print(f"saved baseline for {len(current)} application(s) to {a.save}")
+        return 0
+    with open(a.compare, encoding="utf-8") as f:
+        base = json.load(f)["applications"]
+    bad = 0
+    for app, now in current.items():
+        was = base.get(app)
+        if was is None:
+            print(f"new   {app}: {now['reusable']:.0%} reusable, best option {now['best_cost']:.0%}")
+            continue
+        worse = now["reusable"] < was["reusable"] - a.max_drop or now["best_cost"] > was["best_cost"] + a.max_drop
+        bad += worse
+        print(f"{'FAIL' if worse else 'ok  '} {app}: reusable {was['reusable']:.0%} -> {now['reusable']:.0%}, "
+              f"best option {was['best_cost']:.0%} -> {now['best_cost']:.0%}")
+    return 1 if bad else 0
 
 
 def cmd_capture(a) -> int:
@@ -163,7 +213,7 @@ def main(argv: list[str] | None = None) -> int:
                        help="minimum cacheable prompt length; default: looked up from the model")
         if model:
             p.add_argument("--model", default=None,
-                           help="model id, used to look up the minimum when the log does not name one")
+                           help="model id, used for the minimum and prices when the log does not name one")
         if learn:
             p.add_argument("--learn-from", metavar="LOG",
                            help="learn the plan from this other log (out-of-sample forecast)")
@@ -173,6 +223,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--json", action="store_true")
     p.add_argument("--no-content", action="store_true", help="never print prompt text")
     p.add_argument("--fail-on", metavar="RULES", help="comma-separated rule ids that make the exit status 1")
+    p.add_argument("--price", type=float, default=None,
+                   help="USD per million input tokens; default: looked up from the model")
+    p.add_argument("--html", metavar="FILE", help="also write a self-contained HTML report")
     p.set_defaults(fn=cmd_report)
 
     p = sub.add_parser("diagnose", help="where and why the reusable prefix breaks")
@@ -199,6 +252,22 @@ def main(argv: list[str] | None = None) -> int:
     common(p)
     p.add_argument("--min-reusable", type=float, default=0.5)
     p.set_defaults(fn=cmd_check)
+
+    p = sub.add_parser("quality", help="check whether the prompt fix changes the model's answers (live)")
+    common(p, model=False)
+    p.add_argument("--model", required=True)
+    p.add_argument("--sample", type=int, default=12, help="requests per application to compare")
+    p.add_argument("--max-tokens", type=int, default=400)
+    p.add_argument("--yes", action="store_true", help="actually send the requests")
+    p.set_defaults(fn=cmd_quality)
+
+    p = sub.add_parser("baseline", help="save or compare a content-free summary, for regression checks")
+    common(p)
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--save", metavar="FILE")
+    g.add_argument("--compare", metavar="FILE")
+    p.add_argument("--max-drop", type=float, default=0.05, help="allowed worsening, as a fraction (default 0.05)")
+    p.set_defaults(fn=cmd_baseline)
 
     p = sub.add_parser("capture", help="logging proxy: record the requests your application sends")
     p.add_argument("--out", required=True)

@@ -1,0 +1,47 @@
+name: cacheplan
+description: Check a recorded LLM request log for prompt-caching regressions and report what each caching option would cost.
+branding:
+  icon: activity
+  color: blue
+inputs:
+  log:
+    description: Path to a JSONL request log (a cacheplan capture, raw request bodies or a promptcachelint trace).
+    required: true
+  min-reusable:
+    description: Fail when less than this share of input tokens is reusable (0 to 1). Empty to skip.
+    default: ""
+  fail-on:
+    description: Comma-separated rule ids that fail the job, for example CP001,CP002. Empty to skip.
+    default: ""
+  baseline:
+    description: Path to a baseline saved with `cacheplan baseline --save`. Fails when the log is worse. Empty to skip.
+    default: ""
+  model:
+    description: Model id, used for the minimum cacheable length and prices when the log does not name one.
+    default: ""
+  version:
+    description: pip requirement for cacheplan.
+    default: "cacheplan"
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: python -m pip install --quiet --pre "${{ inputs.version }}"
+    - shell: bash
+      env:
+        LOG: ${{ inputs.log }}
+        MIN_REUSABLE: ${{ inputs.min-reusable }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        BASELINE: ${{ inputs.baseline }}
+        MODEL: ${{ inputs.model }}
+      run: |
+        args=()
+        if [ -n "$MODEL" ]; then args+=(--model "$MODEL"); fi
+        report=(cacheplan report "$LOG" --no-content "${args[@]}")
+        if [ -n "$FAIL_ON" ]; then report+=(--fail-on "$FAIL_ON"); fi
+        status=0
+        out=$("${report[@]}" 2>&1) || status=$?
+        printf '### cacheplan\n\n```\n%s\n```\n' "$out" | tee -a "$GITHUB_STEP_SUMMARY"
+        if [ -n "$MIN_REUSABLE" ]; then cacheplan check "$LOG" --min-reusable "$MIN_REUSABLE" "${args[@]}" || status=1; fi
+        if [ -n "$BASELINE" ]; then cacheplan baseline "$LOG" --compare "$BASELINE" "${args[@]}" || status=1; fi
+        exit $status
