@@ -56,8 +56,8 @@
 <text class="sec" x="236" y="204" font-size="11.5" text-anchor="end">turns inserted mid-prompt</text>
 <path class="s2" d="M250,172 h409.46153846153845 a4,4 0 0 1 4,4 v10 a4,4 0 0 1 -4,4 h-409.46153846153845 z"/>
 <text x="670.4615384615385" y="185.5" font-size="12.5" font-weight="600">125%</text>
-<path class="s1" d="M250,192 h214.30769230769232 a4,4 0 0 1 4,4 v10 a4,4 0 0 1 -4,4 h-214.30769230769232 z"/>
-<text x="475.3076923076923" y="205.5" font-size="12.5"><tspan font-weight="600">66%</tspan><tspan class="sec">  breakpoints</tspan></text>
+<path class="s1" d="M250,192 h204.38 a4,4 0 0 1 4,4 v10 a4,4 0 0 1 -4,4 h-204.38 z"/>
+<text x="465.38" y="205.5" font-size="12.5"><tspan font-weight="600">63%</tspan><tspan class="sec">  breakpoints</tspan></text>
 <text x="236" y="255" font-size="13.5" font-weight="600" text-anchor="end">Claude Code</text>
 <text class="sec" x="236" y="272" font-size="11.5" text-anchor="end">append-only conversation</text>
 <path class="s2" d="M250,240 h85.30769230769232 a4,4 0 0 1 4,4 v10 a4,4 0 0 1 -4,4 h-85.30769230769232 z"/>

@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/shamiksaharcciit-oss/cacheplan/main/docs/img/results.svg" alt="Input cost with caching relative to no caching: LangGraph ReAct template 124% automatic, 48% with cacheplan; Aider 125% automatic, 66% with cacheplan; Claude Code 27% either way" width="800">
+  <img src="https://raw.githubusercontent.com/shamiksaharcciit-oss/cacheplan/main/docs/img/results.svg" alt="Input cost with caching relative to no caching: LangGraph ReAct template 124% automatic, 48% with cacheplan; Aider 125% automatic, 63% with cacheplan; Claude Code 27% either way" width="800">
 </p>
 
 <p align="center"><sub>LangGraph ReAct template: from the <a href="#benchmark-six-agent-starters">benchmark</a> below. Aider and Claude Code: separate captures of real coding sessions, described under <a href="#how-accurate-is-the-forecast">How accurate is the forecast?</a> Claude Code's figure is a local forecast, not measured.</sub></p>
@@ -367,18 +367,20 @@ CrewAI rows show that the miss is repaired, not that it was predicted. Prompts n
 minimum cacheable length remain the least reliable case, and the report warns when that
 applies.
 
-Aider was measured earlier, with cacheplan 0.1.0a1, which priced cache reads at 0.1x where
-the published rate for this model is 0.05x, so its costs are about two points too high:
+Aider is the out-of-sample case: the breakpoint plan was learned from one coding session
+and scored on a different one (`verify --learn-from`, same version, same day):
 
 | Application | Option | Forecast | Measured |
 | --- | --- | --- | --- |
-| Aider | Planned breakpoints, 5-minute | 63% | 62% |
-| Aider | Planned breakpoints, 1-hour | 91% | 90% |
-| Aider | Aider's own caching (`--cache-prompts`) | 65% | 64% |
+| Aider, main prompt | Automatic caching, 5-minute | 125% | 125% |
+| Aider, main prompt | Planned breakpoints, 5-minute | 64% | 63% |
+| Aider, main prompt | Planned breakpoints, 1-hour | 81% | 80% |
 
-There the breakpoint plan was learned from one session and scored on a different one, and
-it matched Aider's hand-tuned caching. Claude Code was at its ceiling already (27%, local
-forecast only, never measured), and `cacheplan` recommended changing nothing.
+Aider's own hand-tuned caching (`--cache-prompts`) measured 64% on a third session with
+cacheplan 0.1.0a1, which priced cache reads at twice the published rate, so the true figure
+is about two points lower. The learned plan is therefore close to the hand-tuned one, not
+shown to beat it. Claude Code was at its ceiling already (27%, local forecast only, never
+measured), and `cacheplan` recommended changing nothing.
 
 ## Limits
 
