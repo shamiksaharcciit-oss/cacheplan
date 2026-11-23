@@ -237,7 +237,7 @@ everywhere. What differs is how much of the forecast each provider's documentati
 | Anthropic API | Yes | Yes | Off, automatic, planned breakpoints, prompt fix; 5-minute and 1-hour | Yes |
 | Bedrock, Claude models (Converse, InvokeModel) | Yes | Yes | Same as Anthropic, as `cachePoint` blocks; Bedrock's own minimums | No |
 | Bedrock, Nova | Yes | Yes, set `--price` | Off, planned breakpoints; 5-minute only | No |
-| OpenAI, GPT-5.6 and later | Yes | Yes | Off, automatic, planned breakpoints, prompt fix; 30-minute and 12-hour; writes at 1.25x and 2.5x | One run, automatic mode |
+| OpenAI, GPT-5.6 and later | Yes | Yes | Off, automatic, planned breakpoints, prompt fix; 30-minute and 12-hour; writes at 1.25x and 2.5x | Two runs, automatic mode |
 | OpenAI, GPT-5.5 and earlier | Yes | Yes | Automatic only (no write fee, nothing to switch on), prompt fix; in-memory and 24h retention | One run |
 | Gemini | Yes | No | None | No |
 
@@ -251,7 +251,10 @@ What to know before relying on the non-Anthropic rows:
   start gives). On `gpt-5.6-luna` the first forecast was wrong (34% against 19% billed): a
   cache write there also makes every earlier message ending readable, so a new conversation
   reuses the shared system message. The rule was corrected from that run and now gives 19%
-  on it, which is a fit to one log, not an independent check. Breakpoints and the 12-hour
+  on it. A separate run with a timestamp in the system prompt then confirmed it
+  independently: forecast 125%, billed 125%, nothing read. On these models the default
+  automatic caching costs more than no caching when the system message changes every
+  request. Breakpoints and the 12-hour
   lifetime on these models, Bedrock and Gemini are untested.
   The rules were read from each provider's documentation on the same day. If your log has recorded usage,
   the report's forecast check tells you how well the model holds on your own traffic; treat

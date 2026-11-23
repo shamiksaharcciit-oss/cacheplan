@@ -49,6 +49,10 @@ def _advice(v: Verdict) -> list[str]:
             lines.append(f'Recommendation: set  "prompt_cache_retention": "24h"  - forecast {v.cost("auto_1h"):.0%} ({v.reason}).')
     elif v.recommended == "off":
         lines.append(f"Recommendation: leave caching off as the prompts stand ({v.reason}).")
+        if v.rules.provider == "openai" and "logged" in v.usage and v.cost("logged") > 1.03:
+            lines.append(f"  Caching is on by default on this model and these requests pay {v.cost('logged'):.0%}. "
+                         'Per OpenAI\'s documentation,  "prompt_cache_options": {"mode": "explicit"}  with no breakpoints '
+                         "stops the automatic writes; this project has not tested that setting.")
     elif v.recommended == "logged":
         lines.append(f"Recommendation: keep your current settings - forecast {v.cost('logged'):.0%} "
                      f"of the uncached input cost ({v.reason}).")
