@@ -376,13 +376,14 @@ and scored on a different one (`verify --learn-from`, same version, same day):
 | Aider, main prompt | Planned breakpoints, 5-minute | 64% | 63% |
 | Aider, main prompt | Planned breakpoints, 1-hour | 81% | 80% |
 | Aider with `--cache-prompts`, a third session | Aider's own caching, as logged | 57% | 57% |
+| Aider with `--cache-prompts`, the same third session | Planned breakpoints, 5-minute | 54% | 54% |
 
-Aider's own hand-tuned caching measured 57% on its session; the learned plan measured 63% on
-another. The sessions differ, so this is not a like-for-like comparison, but it does not
-show the learned plan matching the hand-tuned one: on these numbers the hand-tuned caching
-is ahead. What the learned plan does is take an application from 125% to 63% without anyone
-reading its code. Claude Code was at its ceiling already (27%, local forecast only, never
-measured), and `cacheplan` recommended changing nothing.
+The last two rows are the like-for-like comparison: the same nine requests, once with the
+breakpoints Aider's authors placed by hand and once with the plan `cacheplan` learned from a
+different session. The learned plan came out three points cheaper. That is one short
+session, so read it as "on a par with hand-tuned caching", not as a win. Claude Code was at
+its ceiling already (27%, local forecast only, never measured), and `cacheplan` recommended
+changing nothing.
 
 ## Limits
 
