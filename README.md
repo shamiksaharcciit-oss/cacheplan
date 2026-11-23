@@ -325,28 +325,22 @@ This catches it in the pull request.
 
 ## Benchmark: six agent starters
 
-The same three conversations through each framework's default agent, measured on the live
-Anthropic API on 23 November 2026. Input cost is relative to the same requests without
+The same three conversations through each framework's default agent, captured on 23 November
+2026 and measured on the live Anthropic API with cacheplan 0.3.0a1 (`claude-sonnet-5-5`, cache
+reads at 0.05x an input token). Input cost is relative to the same requests without
 caching. Scripts and method: [`benchmarks/frameworks`](benchmarks/frameworks).
 
 | Framework | Version | As shipped | Automatic caching | Best option measured | Finding |
 | --- | --- | --- | --- | --- | --- |
-| smolagents `ToolCallingAgent` | 1.26.0 | 100% (caching off) | 40% | 36% planned breakpoints | Caching off |
-| Anthropic SDK tool loop | 2.13.0 | 100% (caching off) | 46% | 46% automatic | Caching off |
-| LangChain `create_agent` | 1.5.2 | 100% (caching off) | 46% | 46% automatic | Caching off |
-| Pydantic AI `Agent` | 2.71.0 | 100% (caching off) | 48% | 48% automatic | Caching off |
-| CrewAI `Agent` | 1.15.44 | 90% (caches by default) | 99% | 90% as shipped | Short prompts |
-| LangGraph ReAct template | langgraph 1.2.24 | 100% (caching off) | 124% | 51% after moving the timestamp | Timestamp in the system prompt ([issue](https://github.com/langchain-ai/react-agent/issues/123)) |
+| smolagents `ToolCallingAgent` | 1.26.0 | 100% (caching off) | 36% | 32% planned breakpoints | Caching off |
+| LangChain `create_agent` | 1.5.2 | 100% (caching off) | 42% | 42% automatic | Caching off |
+| Anthropic SDK tool loop | 2.13.0 | 100% (caching off) | 43% | 43% automatic | Caching off |
+| Pydantic AI `Agent` | 2.71.0 | 100% (caching off) | 45% | 45% automatic | Caching off |
+| CrewAI `Agent` | 1.15.44 | 89% (caches by default) | 97% | 89% as shipped | Short prompts |
+| LangGraph ReAct template | langgraph 1.2.24 | 100% (caching off) | 124% | 48% after moving the timestamp | Timestamp in the system prompt ([issue](https://github.com/langchain-ai/react-agent/issues/123)) |
 
-Five of the six ship with caching off. For four of them, switching it on roughly halves the
-input bill. For one it raises the bill, and `cacheplan` says why.
-
-**A correction to these figures.** They were computed with cache reads priced at 0.1x an
-input token. Anthropic's price list gives 0.05x for the model used here, so the true cost of
-every row that reads from the cache is lower than shown, by 0.05 times its read share: about
-3 points for the LangGraph fix (64% read) and 2 points for Aider's breakpoints. Rows that
-read nothing, such as the 124% and 125%, are unaffected. From 0.2.0a1 the read price is
-looked up per model.
+Five of the six ship with caching off. For four of them, switching it on cuts the input
+bill by more than half. For one it raises the bill, and `cacheplan` says why.
 
 ## How accurate is the forecast?
 
