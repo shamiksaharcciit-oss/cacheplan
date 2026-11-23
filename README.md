@@ -156,7 +156,8 @@ react-template
 | **Reusable** | The ceiling: the share of input tokens that repeat an earlier prefix as your prompts stand |
 | **Pace** | How fast requests arrive. Long pauses let 5-minute cache entries expire |
 | **Read** | Share of input tokens the option would read from cache |
-| **Cost vs no caching** | Forecast input cost, where 100% is the same prompts with caching off. Cache writes count 1.25x (5-minute) or 2x (1-hour), reads 0.1x |
+| **Cost vs no caching** | Forecast input cost, where 100% is the same prompts with caching off. Cache writes count 1.25x (5-minute) or 2x (1-hour); reads count 0.1x on most models and less on some, looked up from the model in your log |
+| **This log** | The same forecast in money, when the model's price is known or `--price` is given |
 | **Planned breakpoints** | `cache_control` markers placed where your log shows prefixes actually repeat, and only where a write is read back often enough to pay for itself |
 | **Prompt fix** | What you would get after moving the changing values the findings point to. Shown separately because it changes the prompt |
 
@@ -169,7 +170,9 @@ react-template
 | `cacheplan verify LOG --model M --yes` | Replay against the live API and compare forecast with measured |
 | `cacheplan gaps LOG` | See how the forecast changes as pauses between requests grow |
 | `cacheplan check LOG --min-reusable 0.5` | Fail a pipeline when too little of the prompt is reusable |
-| `cacheplan capture --out LOG` | Record requests through a local proxy |
+| `cacheplan quality LOG --model M --yes` | Check whether the prompt fix changes the model's answers, against a control |
+| `cacheplan baseline LOG --save FILE` / `--compare FILE` | Save a content-free summary and fail later runs that are worse |
+| `cacheplan capture --out LOG` | Record requests and their token usage through a local proxy |
 | `cacheplan rules` | List rule ids |
 
 Useful options:
@@ -179,10 +182,38 @@ Useful options:
 - `--model ID` or `--min-tokens N` sets the minimum cacheable prompt length when the log does
   not name the model. Otherwise it is looked up per request.
 - `--fail-on CP001,CP002` makes `report` exit with status 1 when those findings appear.
+- `--price N` sets the input price in USD per million tokens; by default it is looked up from the model.
+- `--html report.html` also writes a self-contained page you can forward.
 
 **Log formats.** One JSON object per line, and formats can be mixed in one file: a
 `cacheplan capture` line, a raw Anthropic request body, or a
 [promptcachelint](https://github.com/OsmnvAslan/promptcachelint) trace record.
+
+### Real token counts
+
+Token counts are estimated from characters unless the log holds the provider's own numbers.
+`cacheplan capture` and the in-process recorder both store the usage block of every
+response (never the response text). When a log has it, `report`:
+
+- calibrates its token estimate on your own traffic, including the tokens the API adds for
+  tool use;
+- prints a **forecast check**: what it predicted for the settings you ran with, next to what
+  the provider actually billed. No extra API calls are needed.
+
+### Record from inside your application
+
+No proxy needed: wrap the HTTP transport of the Anthropic SDK client.
+
+```python
+import anthropic
+from cacheplan.record import RecordingTransport
+
+client = anthropic.Anthropic(http_client=anthropic.DefaultHttpxClient(
+    transport=RecordingTransport("requests.jsonl", app="my-app")))
+```
+
+Use `AsyncRecordingTransport` with `anthropic.DefaultAsyncHttpxClient` for the async client.
+Headers and response text are never written.
 
 ## Rules
 
@@ -200,12 +231,27 @@ Useful options:
 
 ## Use it in CI
 
-Record a short session in your test suite, then guard against changes that break the cache:
+Record a short session in your test suite, then guard against changes that break the cache.
+As a GitHub Action:
+
+```yaml
+- uses: actions/setup-python@v7
+  with:
+    python-version: "3.12"
+- uses: shamiksaharcciit-oss/cacheplan@main
+  with:
+    log: captures/session.jsonl
+    min-reusable: "0.5"
+    fail-on: CP001,CP002
+    baseline: captures/baseline.json   # optional, from `cacheplan baseline --save`
+```
+
+The report is added to the job summary without prompt text. Or call the commands directly:
 
 ```yaml
 - run: pip install --pre cacheplan
 - run: cacheplan check captures/session.jsonl --min-reusable 0.5
-- run: cacheplan report captures/session.jsonl --fail-on CP001,CP002 --no-content
+- run: cacheplan baseline captures/session.jsonl --compare captures/baseline.json
 ```
 
 One developer adding a timestamp to the system prompt can silently undo a cache saving.
@@ -228,6 +274,13 @@ caching. Scripts and method: [`benchmarks/frameworks`](benchmarks/frameworks).
 
 Five of the six ship with caching off. For four of them, switching it on roughly halves the
 input bill. For one it raises the bill, and `cacheplan` says why.
+
+**A correction to these figures.** They were computed with cache reads priced at 0.1x an
+input token. Anthropic's price list gives 0.05x for the model used here, so the true cost of
+every row that reads from the cache is lower than shown, by 0.05 times its read share: about
+3 points for the LangGraph fix (64% read) and 2 points for Aider's breakpoints. Rows that
+read nothing, such as the 124% and 125%, are unaffected. From 0.2.0a1 the read price is
+looked up per model.
 
 ## How accurate is the forecast?
 
@@ -259,16 +312,19 @@ local model only), and `cacheplan` correctly recommended changing nothing.
 ## Limits
 
 - **Small evidence base.** Eight applications, one or two short sessions each, one model.
-- **The forecast is a model.** It follows the documented caching rules and estimates tokens
-  from character counts (3.5 characters per token, plus the tool-use instructions the API
-  adds). Run `verify` before acting on a close call.
+- **The forecast is a model.** It follows the documented caching rules. Tokens are estimated
+  from characters unless the log has recorded usage, in which case the estimate is calibrated
+  on it. Run `verify` before acting on a close call.
 - **Minimum cacheable length varies by model.** It is looked up from the model in your log; set
   `--model` or `--min-tokens` if the log does not name one. Forecasts for prompts close to the
   minimum are rough.
-- **The prompt fix changes what the model reads.** It never drops content, but its effect on
-  answer quality is not measured. Implement and test it yourself.
-- **Plans are learned from the log you give it.** A short or unrepresentative log gives a
-  poor plan. Use `--learn-from` to test on a second log.
+- **The prompt fix changes what the model reads.** It never drops content. `cacheplan quality`
+  compares answers with and without it against a control, on actions taken and wording; that
+  is a screen, not a full evaluation, and it has only been tested against a stand-in so far.
+- **Plans are chosen by replaying the log you give it,** with its real timing, separately
+  for each cache lifetime. A short or unrepresentative log gives a poor plan. Use
+  `--learn-from` to test on a second log.
+- **Prices and minimums are a snapshot** of Anthropic's documentation on 23 November 2026.
 - **Savings apply to input tokens only.** Output tokens are unaffected.
 - **Anthropic only** in this release.
 
@@ -284,7 +340,7 @@ at them first.
 | Find where the prefix breaks | Yes | Yes | Yes |
 | Flag timestamps and similar | Yes | Yes | Yes |
 | OpenAI support | Yes | Yes | Not yet |
-| In-process SDK recording | Yes | Yes | Not yet (proxy) |
+| In-process SDK recording | Yes | Yes | Yes |
 | Forecast cost for each caching option | | | Yes |
 | Plan where to place breakpoints | | | Yes |
 | Recommend off, 5-minute or 1-hour | | | Yes |
@@ -294,11 +350,10 @@ Comparison made on 23 November 2026 against promptcachelint 0.1.0 and cachelint 
 
 ## Roadmap
 
-- Read usage counters from recorded responses, so forecasts can be checked on any log
-- In-process recording through the SDK's HTTP client
-- OpenAI and other providers
-- Baselines and regression policies for CI
-- A shareable HTML report
+- Read Langfuse, LangSmith, OpenTelemetry and LiteLLM exports
+- OpenAI, then other providers
+- A wrapper that applies the plan automatically, once the quality check has more evidence
+- Longer sessions and more frameworks in the benchmark
 
 ## Development
 

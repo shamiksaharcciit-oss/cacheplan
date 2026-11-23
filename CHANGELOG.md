@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.0a1
+
+- **Real token counts.** The capture proxy now records the usage block of each response.
+  When a log has usage, the token estimate is calibrated on it, and the report prints a
+  forecast check against what the provider billed.
+- **Model prices.** The cache-read price is looked up per model (0.05x on claude-sonnet-5-5,
+  for example; earlier versions assumed 0.1x everywhere, which overstated costs for options
+  that read from the cache). Input prices are looked up too, so the report shows money;
+  `--price` overrides.
+- **Tool-use overhead per model**, from Anthropic's published figures.
+- **Breakpoint plans are chosen by replaying the log** with its real timing, separately for
+  the 5-minute and 1-hour lifetimes, instead of by a reuse-rate rule.
+- New commands: `quality` (does the prompt fix change answers, against a control) and
+  `baseline` (save and compare a content-free summary).
+- `cacheplan.record`: record from inside an application through the SDK's HTTP transport.
+- `report --html` writes a self-contained report. A GitHub Action is included (`action.yml`).
+- The benchmark script writes its results table into the benchmark README.
+
 ## 0.1.0a2
 
 - The minimum cacheable prompt length is looked up from the model named in each logged

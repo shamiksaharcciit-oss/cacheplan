@@ -173,7 +173,7 @@ def test_inserting_layout_gets_planned_breakpoints():
     assert v.layout == "content inserted or changed mid-prompt"
     assert v.recommended == "plan_5m"
     assert v.cost("plan_5m") < v.cost("auto_5m") - 0.2
-    assert v.plan.offsets == (3,) and v.plan.const_prefix == 2
+    assert v.plan.offsets == (3,)          # one breakpoint just before the insertion point is enough
 
 
 def test_timestamp_layout_recommends_off_and_offers_the_fix():
@@ -348,6 +348,7 @@ def test_capture_proxy_logs_body_but_not_the_key(upstream, tmp_path):
     assert "sk-secret" not in logged and _Upstream.seen[0][0] == "sk-secret"
     rows = load(str(out)).rows
     assert len(rows) == 3 and rows[0]["app"] == "demo" and rows[0]["request"]["system"] == "hello"
+    assert rows[0]["usage"]["cache_read_input_tokens"] == 90          # usage recorded, response text is not
 
 
 # ------------------------------------------------------------------ model minimums
@@ -403,3 +404,152 @@ def test_hidden_tool_instructions_count_towards_the_minimum():
         sim = CacheSim(min_tokens=512)
         sim.request(place_breakpoints(req), 0)
         assert (sim.request(place_breakpoints(req), 1).cache_read_input_tokens > 0) is cached
+
+
+# ------------------------------------------------------------------ measured tokens, prices, plans
+def test_usage_is_read_from_streamed_responses():
+    from cacheplan.proxy import usage_from_response
+    sse = (b'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":12,'
+           b'"cache_read_input_tokens":300,"cache_creation_input_tokens":40}}}\n\n'
+           b'event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":55}}\n\n')
+    u = usage_from_response(sse, "text/event-stream")
+    assert u == {"input_tokens": 12, "cache_read_input_tokens": 300, "cache_creation_input_tokens": 40, "output_tokens": 55}
+    assert usage_from_response(b'{"usage":{"input_tokens":7}}', "application/json") == {"input_tokens": 7}
+    assert usage_from_response(b"not json", "application/json") is None
+
+
+def _with_usage(rows, scale, overhead):
+    """Attach the usage a provider would report if real tokens were scale * estimate + overhead."""
+    from cacheplan.forecast import _est
+    for r in rows:
+        real = round(_est(r["request"]) * scale) + (overhead if r["request"].get("tools") else 0)
+        r["usage"] = {"input_tokens": real, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
+    return rows
+
+
+def test_token_estimate_is_calibrated_from_recorded_responses():
+    from cacheplan.forecast import calibrate
+    tool = {"name": "search", "description": "Search.", "input_schema": {"type": "object", "properties": {}}}
+    rows = appending_agent(n=10)
+    for r in rows:
+        r["request"]["system"] = "short system prompt"            # so prompt sizes vary a lot
+        r["request"]["tools"] = [tool]
+    cal = calibrate(_with_usage(rows, 1.3, 420), 300)
+    assert cal.responses == 10
+    assert cal.scale == pytest.approx(1.3, abs=0.02) and cal.overhead == pytest.approx(420, abs=15)
+    assert calibrate(rows[:3], 300).responses == 0                # too few responses: defaults kept
+
+
+def test_report_checks_its_forecast_against_recorded_usage(tmp_path, capsys):
+    rows = _with_usage(appending_agent(), 1.2, 0)
+    path = _write(tmp_path, "measured.jsonl", rows)
+    cli.main(["report", path])
+    out = capsys.readouterr().out
+    assert "calibrated on 8 recorded responses" in out and "Forecast check" in out
+    v = examine(load(path).rows)[0]
+    assert v.measured_cost == pytest.approx(1.0)                   # the log itself ran without caching
+    assert v.tokens == pytest.approx(sum(r["usage"]["input_tokens"] for r in rows), rel=0.01)
+
+
+def test_prices_and_cache_read_price_come_from_the_model(tmp_path, capsys):
+    from cacheplan.models import spec
+    assert spec("claude-sonnet-5-5").read_x == 0.05 and spec("claude-sonnet-5-5").input_price == 2.0
+    assert spec("claude-sonnet-4-5").read_x == 0.10 and spec("claude-opus-4-7").tool_overhead == 675
+    rows = appending_agent()
+    cheap = examine([dict(r, request=dict(r["request"], model="claude-sonnet-5-5")) for r in rows])[0]
+    dear = examine([dict(r, request=dict(r["request"], model="claude-sonnet-4-5")) for r in rows])[0]
+    assert cheap.cost("auto_5m") < dear.cost("auto_5m")           # cheaper cache reads
+    path = _write(tmp_path, "priced.jsonl", [dict(r, request=dict(r["request"], model="claude-sonnet-5-5")) for r in rows])
+    cli.main(["report", path])
+    assert "$2 per million" in capsys.readouterr().out
+    cli.main(["report", path, "--price", "9"])
+    assert "$9 per million" in capsys.readouterr().out
+
+
+def test_plan_depends_on_the_pace_of_the_log():
+    """With seconds between turns breakpoints pay off; with ten-minute pauses the 5-minute
+    plan places none, and the 1-hour plan still does."""
+    from cacheplan.messages import FIVE_MIN, ONE_HOUR
+    fast = learn_from(inserting_agent())
+    assert fast.plans["inserter"][FIVE_MIN].offsets == (3,)
+    slow_rows = inserting_agent()
+    for i, r in enumerate(slow_rows):
+        r["ts"] = i * 600.0
+    slow = learn_from(slow_rows)
+    p5, p60 = slow.plans["inserter"][FIVE_MIN], slow.plans["inserter"][ONE_HOUR]
+    assert not (p5.head or p5.const_prefix or p5.offsets)
+    assert p60.head or p60.const_prefix or p60.offsets
+    assert examine(slow_rows)[0].recommended in ("plan_1h", "auto_1h")
+
+
+def test_html_report_is_self_contained(tmp_path):
+    path = _write(tmp_path, "clock.jsonl", timestamp_agent())
+    out = tmp_path / "report.html"
+    assert cli.main(["report", path, "--html", str(out)]) == 0
+    page = out.read_text(encoding="utf-8")
+    assert page.startswith("<!doctype html>") and "CP001" in page and "<script" not in page and "http" not in page
+
+
+# ------------------------------------------------------------------ quality check, baseline, recorder
+def test_quality_check_compares_actions_against_a_control(upstream, monkeypatch):
+    from cacheplan import quality
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setattr(urllib.request, "urlopen", urllib.request.build_opener(urllib.request.ProxyHandler({})).open)
+    rows = timestamp_agent()
+    res = quality.run(rows, learn_from(rows), "m", sample=3, progress=lambda *_: None,
+                      url=f"http://127.0.0.1:{upstream.server_port}/v1/messages")
+    assert len(res) == 1 and res[0].samples == 3
+    assert res[0].fix_same_action == 3 and "inconclusive" in res[0].verdict      # three samples prove nothing
+    assert len(_Upstream.seen) == 9 and _Upstream.seen[0][1]["max_tokens"] == 400
+    assert quality.action({"content": [{"type": "tool_use", "name": "search", "input": {"q": 1}}]}) != \
+        quality.action({"content": [{"type": "text", "text": "hi"}]})
+
+
+def test_baseline_save_and_compare(tmp_path, capsys):
+    good = _write(tmp_path, "good.jsonl", appending_agent())
+    base = str(tmp_path / "base.json")
+    assert cli.main(["baseline", good, "--save", base]) == 0
+    assert "question" not in (tmp_path / "base.json").read_text()          # content-free
+    assert cli.main(["baseline", good, "--compare", base]) == 0
+    rows = timestamp_agent()
+    for r in rows:
+        r["app"] = "appender"                                             # the same app, now with a clock
+    assert cli.main(["baseline", _write(tmp_path, "bad.jsonl", rows), "--compare", base]) == 1
+
+
+def test_in_process_recorder_logs_request_and_usage(tmp_path):
+    httpx = pytest.importorskip("httpx")
+    from cacheplan.record import RecordingTransport
+
+    def upstream_reply(request):
+        if request.url.path.endswith("/v1/messages"):
+            assert request.headers["accept-encoding"] == "identity"
+        return httpx.Response(200, json={"content": [{"type": "text", "text": "secret answer"}],
+                                         "usage": {"input_tokens": 11, "cache_read_input_tokens": 5}})
+    out = tmp_path / "rec.jsonl"
+    client = httpx.Client(transport=RecordingTransport(str(out), "inproc", inner=httpx.MockTransport(upstream_reply)))
+    r = client.post("https://api.anthropic.com/v1/messages", headers={"x-api-key": "sk-secret"},
+                    json={"model": "m", "system": "s", "messages": [{"role": "user", "content": "hi"}]})
+    assert r.json()["usage"]["input_tokens"] == 11
+    client.get("https://api.anthropic.com/v1/models")                      # not recorded
+    client.close()
+    logged = out.read_text()
+    assert "sk-secret" not in logged and "secret answer" not in logged
+    rows = load(str(out)).rows
+    assert len(rows) == 1 and rows[0]["app"] == "inproc" and rows[0]["usage"]["cache_read_input_tokens"] == 5
+
+
+def test_quality_verdict_needs_the_gap_to_exceed_its_uncertainty():
+    from cacheplan.quality import Result
+    small = Result("a", samples=10, control_same_action=8, fix_same_action=7,
+                   control_similarity=[0.9, 0.2, 0.8, 0.3, 0.7, 0.4, 0.9, 0.1, 0.8, 0.6],
+                   fix_similarity=[0.5, 0.4, 0.6, 0.2, 0.3, 0.5, 0.7, 0.2, 0.4, 0.7],
+                   different=[{}], only_control_changed=0)
+    assert "inconclusive" in small.verdict
+    same = Result("b", samples=30, control_same_action=27, fix_same_action=27,
+                  control_similarity=[0.6] * 30, fix_similarity=[0.59] * 30)
+    assert same.verdict == "no difference beyond run-to-run variation"
+    worse = Result("c", samples=30, control_same_action=28, fix_same_action=20,
+                   control_similarity=[0.7] * 15 + [0.6] * 15, fix_similarity=[0.4] * 15 + [0.35] * 15,
+                   different=[{}] * 8, only_control_changed=0)
+    assert "review before adopting" in worse.verdict

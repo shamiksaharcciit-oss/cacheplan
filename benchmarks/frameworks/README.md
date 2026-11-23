@@ -21,6 +21,9 @@ cacheplan proxy, forecasts each caching option and can measure them against the 
 Input cost relative to the same requests without caching, measured on the live Anthropic API
 with `claude-sonnet-5-5`. 13 to 18 requests per framework.
 
+<!-- results:start -->
+Pasted from the first run on 23 November 2026; `bench.py verify` rewrites this block.
+
 | Framework | Version | As shipped | Automatic caching | Best option measured | Finding |
 | --- | --- | --- | --- | --- | --- |
 | smolagents `ToolCallingAgent` | 1.26.0 | 100% (caching off) | 40% | 36% planned breakpoints | Caching off |
@@ -29,6 +32,7 @@ with `claude-sonnet-5-5`. 13 to 18 requests per framework.
 | Pydantic AI `Agent` | 2.71.0 | 100% (caching off) | 48% | 48% automatic | Caching off |
 | CrewAI `Agent` | 1.15.44 | 90% (caches by default) | 99% | 90% as shipped | Short prompts |
 | LangGraph ReAct template | langgraph 1.2.24 | 100% (caching off) | 124% | 51% after moving the timestamp | Timestamp in the system prompt ([issue](https://github.com/langchain-ai/react-agent/issues/123)) |
+<!-- results:end -->
 
 cacheplan 0.1.0a1 forecast five of the six within one point. It missed CrewAI (forecast
 100% as shipped and 111% automatic; measured 90% and 99%): its prompts are short, and the

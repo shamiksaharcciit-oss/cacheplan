@@ -29,7 +29,7 @@ def _row(d: dict, default_app: str, n: int) -> dict | str:
         return "not a JSON object"
     usage = None
     if isinstance(d.get("request"), dict):
-        req, ts, app, session = d["request"], d.get("ts"), d.get("app"), d.get("session")
+        req, ts, app, session, usage = d["request"], d.get("ts"), d.get("app"), d.get("session"), d.get("usage")
     elif isinstance(d.get("body"), dict):                       # promptcachelint trace
         if d.get("provider") not in (None, "anthropic"):
             return f"provider {d.get('provider')} not supported yet"
@@ -98,3 +98,16 @@ def by_app(rows: list[dict]) -> dict[str, list[dict]]:
 def conversation_key(row: dict) -> str:
     msgs = row["request"].get("messages") or [{}]
     return row.get("session") or json.dumps(msgs[0], sort_keys=True)
+
+
+def real_usage(row: dict):
+    """The provider's own token counts for a logged request, if the log has them.
+    Accepts Anthropic usage objects and promptcachelint's field names."""
+    from .sim import Usage
+    u = row.get("usage")
+    if not isinstance(u, dict) or u.get("input_tokens") is None:
+        return None
+    creation = u.get("cache_creation_input_tokens", u.get("cache_write")) or 0
+    read = u.get("cache_read_input_tokens", u.get("cache_read")) or 0
+    one_hour = (u.get("cache_creation") or {}).get("ephemeral_1h_input_tokens") or 0
+    return Usage(int(u["input_tokens"]), int(creation), int(read), int(one_hour))
