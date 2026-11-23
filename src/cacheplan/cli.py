@@ -1,4 +1,4 @@
-"""cachedoctor command line."""
+"""cacheplan command line."""
 from __future__ import annotations
 
 import argparse
@@ -37,10 +37,10 @@ def cmd_report(a) -> int:
     apps = by_app(rows)
     results = [(v, findings(v, apps[v.app], k, a.min_tokens, not a.no_content)) for v in verdicts]
     if a.json:
-        print(json.dumps({"cachedoctor": __version__, "applications": [as_dict(v, f) for v, f in results]}, indent=1))
+        print(json.dumps({"cacheplan": __version__, "applications": [as_dict(v, f) for v, f in results]}, indent=1))
     else:
-        print(f"cachedoctor {__version__}: {len(rows)} requests, {len(results)} application(s). "
-              "Forecasts come from a local model of Anthropic caching; confirm with `cachedoctor verify`.\n")
+        print(f"cacheplan {__version__}: {len(rows)} requests, {len(results)} application(s). "
+              "Forecasts come from a local model of Anthropic caching; confirm with `cacheplan verify`.\n")
         shown = [(v, f) for v, f in results if v.requests >= 3 or len(results) == 1]
         print("\n\n".join(text(v, f) for v, f in shown))
         if len(shown) < len(results):
@@ -153,7 +153,7 @@ def cmd_rules(_) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="cachedoctor", description=__doc__)
+    ap = argparse.ArgumentParser(prog="cacheplan", description=__doc__)
     ap.add_argument("--version", action="version", version=__version__)
     sub = ap.add_subparsers(dest="cmd", required=True)
 

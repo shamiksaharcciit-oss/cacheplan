@@ -5,7 +5,7 @@ hashed block by block in the order tools -> system -> messages; a lookup at a br
 also checks up to 20 earlier block boundaries; an entry lives for the lifetime of the
 breakpoint that wrote it (5 minutes or 1 hour) and is refreshed on every read; prefixes
 shorter than a model-specific minimum are not cached. Token counts are estimates.
-It is a model, not the service: use `cachedoctor verify` for real numbers.
+It is a model, not the service: use `cacheplan verify` for real numbers.
 """
 from __future__ import annotations
 

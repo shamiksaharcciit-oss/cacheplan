@@ -1,7 +1,7 @@
 """Read request logs.
 
 Accepted line formats (JSONL, one request per line, formats may be mixed):
-  cachedoctor capture   {"ts": ..., "app": ..., "request": {tools, system, messages}}
+  cacheplan capture   {"ts": ..., "app": ..., "request": {tools, system, messages}}
   raw request body      {"model": ..., "system": ..., "messages": [...]}
   promptcachelint trace {"provider": "anthropic", "body": {...}, "at": ..., "usage": {...}}
 

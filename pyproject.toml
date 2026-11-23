@@ -3,7 +3,7 @@ requires = ["hatchling>=1.24"]
 build-backend = "hatchling.build"
 
 [project]
-name = "cachedoctor"
+name = "cacheplan"
 dynamic = ["version"]
 description = "Diagnose LLM prompt caching, forecast what each setting would cost, and plan the fix."
 readme = "README.md"
@@ -24,17 +24,17 @@ dependencies = []
 dev = ["pytest>=8"]
 
 [project.urls]
-Homepage = "https://github.com/shamiksaharcciit-oss/cachedoctor"
-Issues = "https://github.com/shamiksaharcciit-oss/cachedoctor/issues"
+Homepage = "https://github.com/shamiksaharcciit-oss/cacheplan"
+Issues = "https://github.com/shamiksaharcciit-oss/cacheplan/issues"
 
 [project.scripts]
-cachedoctor = "cachedoctor.cli:main"
+cacheplan = "cacheplan.cli:main"
 
 [tool.hatch.version]
-path = "src/cachedoctor/__init__.py"
+path = "src/cacheplan/__init__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/cachedoctor"]
+packages = ["src/cacheplan"]
 
 [tool.hatch.build.targets.sdist]
 include = ["src", "tests", "README.md", "LICENSE", "CHANGELOG.md"]

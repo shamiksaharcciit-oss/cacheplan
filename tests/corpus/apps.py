@@ -18,7 +18,7 @@ from pathlib import Path
 
 from . import content as c
 
-_SRC = sorted((Path(__file__).resolve().parents[2] / "src" / "cachedoctor").glob("*.py"))
+_SRC = sorted((Path(__file__).resolve().parents[2] / "src" / "cacheplan").glob("*.py"))
 
 
 def _stamp(t: float) -> str:
@@ -103,7 +103,7 @@ def code_session(rng: random.Random, t: float):
         tid = f"toolu_{rng.getrandbits(80):020x}"
         msgs.append({"role": "assistant", "content": [
             {"type": "text", "text": f"I'll read {f.name} next."},
-            {"type": "tool_use", "id": tid, "name": "read_file", "input": {"path": f"src/cachedoctor/{f.name}"}}]})
+            {"type": "tool_use", "id": tid, "name": "read_file", "input": {"path": f"src/cacheplan/{f.name}"}}]})
         msgs.append({"role": "user", "content": [{"type": "tool_result", "tool_use_id": tid,
                                                   "content": f.read_text(encoding="utf-8")[:3200]}]})
         changed += rng.random() < 0.3

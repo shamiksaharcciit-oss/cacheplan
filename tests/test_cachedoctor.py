@@ -5,14 +5,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from cachedoctor import cli, live
-from cachedoctor.diagnose import find_breaks
-from cachedoctor.findings import findings
-from cachedoctor.forecast import build, examine, learn_from, simulate
-from cachedoctor.logs import by_app, load
-from cachedoctor.messages import (ONE_HOUR, apply_template, canonicalize_request, learn,
+from cacheplan import cli, live
+from cacheplan.diagnose import find_breaks
+from cacheplan.findings import findings
+from cacheplan.forecast import build, examine, learn_from, simulate
+from cacheplan.logs import by_app, load
+from cacheplan.messages import (ONE_HOUR, apply_template, canonicalize_request, learn,
                                   learn_breakpoints, place_breakpoints, prefix_blocks, system_text)
-from cachedoctor.sim import CacheSim
+from cacheplan.sim import CacheSim
 from tests.corpus.apps import generate
 
 BIG = "policy " * 2000
@@ -183,7 +183,7 @@ def test_timestamp_layout_recommends_off_and_offers_the_fix():
     assert v.recommended == "off" and v.cost("auto_5m") > 1.2
     assert v.fix_option == "fix_5m" and v.cost("fix_5m") < 0.6
     rules = {f.rule for f in findings(v, rows, learn_from(rows))}
-    assert {"CD001", "CD003"} <= rules
+    assert {"CP001", "CP003"} <= rules
 
 
 def test_slow_append_only_traffic_prefers_the_one_hour_lifetime():
@@ -267,7 +267,7 @@ def test_report_json_and_fail_on(tmp_path, capsys):
     data = json.loads(capsys.readouterr().out)
     app = data["applications"][0]
     assert app["recommended"] == "off" and app["prompt_fix_option"] == "fix_5m"
-    assert cli.main(["report", path, "--fail-on", "CD001"]) == 1
+    assert cli.main(["report", path, "--fail-on", "CP001"]) == 1
 
 
 def test_report_no_content_hides_prompt_text(tmp_path, capsys):
@@ -288,7 +288,7 @@ def test_other_commands_run(tmp_path, capsys, corpus_log):
     assert cli.main(["gaps", corpus_log, "--scales", "1,20"]) == 0
     assert cli.main(["rules"]) == 0
     assert cli.main(["verify", corpus_log, "--model", "m"]) == 2      # refuses without --yes
-    assert "CD001" in capsys.readouterr().out
+    assert "CP001" in capsys.readouterr().out
 
 
 # ------------------------------------------------------------------ live plumbing (against a local stand-in)
@@ -333,7 +333,7 @@ def test_verify_sends_one_token_requests_and_reads_usage(upstream, monkeypatch):
 
 
 def test_capture_proxy_logs_body_but_not_the_key(upstream, tmp_path):
-    from cachedoctor.proxy import serve
+    from cacheplan.proxy import serve
     out = tmp_path / "cap.jsonl"
     px = serve(0, f"http://127.0.0.1:{upstream.server_port}", str(out), "demo")
     threading.Thread(target=px.serve_forever, daemon=True).start()

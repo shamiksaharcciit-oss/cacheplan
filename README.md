@@ -1,10 +1,10 @@
-# cachedoctor
+# cacheplan
 
 Diagnose LLM prompt caching, forecast what each setting would cost, and plan the fix.
 
 Prompt caching can cut input cost by more than half, or raise it by a quarter. Which one
 you get depends on how your application builds its prompts and how fast requests arrive.
-`cachedoctor` reads a log of your requests and tells you, per application:
+`cacheplan` reads a log of your requests and tells you, per application:
 
 - **where and why** the reusable prefix breaks (a timestamp in the system prompt, tools in
   a different order, new turns inserted before content that was already sent);
@@ -21,13 +21,13 @@ Status: early alpha. Anthropic Messages API only.
 ## Install
 
 ```
-pip install cachedoctor
+pip install --pre cacheplan
 ```
 
 ## Use
 
 ```
-cachedoctor report requests.jsonl
+cacheplan report requests.jsonl
 ```
 
 Example output, abridged (LangChain's ReAct agent template):
@@ -50,7 +50,7 @@ react-template
   so compare answer quality before adopting it.
 
   Findings
-    CD001 system value <<system_time>> changes between requests; everything after it,
+    CP001 system value <<system_time>> changes between requests; everything after it,
           including the conversation history, cannot be reused
         fix: move it to the latest user message, or make it change rarely
 ```
@@ -59,14 +59,14 @@ No log yet? Record one. The proxy writes request bodies only; headers, and so yo
 key, never reach the file.
 
 ```
-cachedoctor capture --out requests.jsonl --app my-app
+cacheplan capture --out requests.jsonl --app my-app
 # in the shell that runs your application:
 #   ANTHROPIC_BASE_URL=http://127.0.0.1:8787
 ```
 
 | Command | What it does |
 | --- | --- |
-| `report LOG` | Diagnosis, forecast and recommendation per application. `--json`, `--no-content`, `--fail-on CD001,CD002`. |
+| `report LOG` | Diagnosis, forecast and recommendation per application. `--json`, `--no-content`, `--fail-on CP001,CP002`. |
 | `diagnose LOG -v` | Every prefix break: where, what changed, how many tokens sit behind it. |
 | `verify LOG --model M --yes` | Replays the recommended options against the live API and prints forecast next to measured. |
 | `gaps LOG` | How the forecast changes as pauses between requests grow. |
@@ -81,7 +81,7 @@ an out-of-sample forecast.
 
 One JSON object per line; formats can be mixed in one file:
 
-- a `cachedoctor capture` line;
+- a `cacheplan capture` line;
 - a raw Anthropic request body;
 - a [promptcachelint](https://github.com/OsmnvAslan/promptcachelint) trace record.
 
@@ -90,7 +90,7 @@ One JSON object per line; formats can be mixed in one file:
 Measured on 23 November 2026 with one model, short sessions. Cost is input cost relative to
 the same prompts sent without caching.
 
-| Application | Layout | Automatic caching | cachedoctor | Source |
+| Application | Layout | Automatic caching | cacheplan | Source |
 | --- | --- | --- | --- | --- |
 | LangChain ReAct agent template | timestamp in the system prompt | 125% | 51% with the prompt fix | live API |
 | Aider | finished turns inserted mid-prompt | 125% | 66% with planned breakpoints (Aider's own caching: 67%) | live API, plan learned on a different session |
@@ -116,7 +116,7 @@ The local model's forecast was within two points of the live measurement in ever
 
 [promptcachelint](https://github.com/OsmnvAslan/promptcachelint) and
 [cachelint](https://github.com/Diafyx/cachelint) explain why a prompt cache missed, and both
-support OpenAI as well. `cachedoctor` overlaps with them on diagnosis and adds the forecast,
+support OpenAI as well. `cacheplan` overlaps with them on diagnosis and adds the forecast,
 the breakpoint plan, the lifetime choice and live verification.
 
 ## Development
