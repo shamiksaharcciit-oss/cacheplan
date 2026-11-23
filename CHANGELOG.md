@@ -10,6 +10,8 @@
   whatever `pip install cacheplan` resolves to. `version` still selects a PyPI release.
 - `capture --no-content` (and `no_content=True` on the recorders) scrambles prompt text as it
   is written. Reports still work on such a log. New capture files are owner-readable only.
+  Short values such as counters and seconds scramble one to one, so a changing value is
+  never hidden by two values looking alike.
 - `capture` now says at start-up that the log holds everything sent to the model.
 - `cacheplan providers` and an "Evidence for these rules" line in reports: each provider's
   rule set carries its source and what live evidence stands behind it.

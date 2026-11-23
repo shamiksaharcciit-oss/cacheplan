@@ -94,20 +94,53 @@ def new_salt() -> bytes:
     return os.urandom(16)
 
 
+_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+_INDEX = {c: i for i, c in enumerate(_ALPHABET)}
+_SHORT = 6                           # words up to this length are scrambled without collisions
+
+
+def _permute(n: int, size: int, salt: bytes) -> int:
+    """A keyed one-to-one mapping of 0..size-1 onto itself (a small Feistel network, walked
+    until the result lands inside the range)."""
+    half = max(1, ((size - 1).bit_length() + 1) // 2)
+    mask = (1 << half) - 1
+    while True:
+        left, right = n >> half, n & mask
+        for round_no in range(4):
+            f = int.from_bytes(hashlib.blake2b(f"{round_no}:{right}:{size}".encode(), key=salt, digest_size=8).digest(), "big")
+            left, right = right, left ^ (f & mask)
+        n = (left << half) | right
+        if n < size:
+            return n
+
+
+def _scramble_word(word: str, salt: bytes) -> str:
+    """Same length, same word -> same result. Short words (counters, seconds, ids) map one to
+    one, so two different values never look the same; longer ones use a truncated hash."""
+    if len(word) <= _SHORT and all(c in _INDEX for c in word):
+        size, n = len(_ALPHABET) ** len(word), 0
+        for c in word:
+            n = n * len(_ALPHABET) + _INDEX[c]
+        n, out = _permute(n, size, salt), []
+        for _ in word:
+            n, r = divmod(n, len(_ALPHABET))
+            out.append(_ALPHABET[r])
+        return "".join(reversed(out))
+    digest = hashlib.blake2b(word.encode(), key=salt).hexdigest()
+    return (digest * (len(word) // len(digest) + 1))[:len(word)]
+
+
 def scramble(value, salt: bytes, key: str = ""):
     """A copy of a request body with every word of text replaced by scrambled characters of
     the same length. Structure, lengths, spacing and punctuation are kept, and the same word
     always scrambles to the same characters within one capture, so cacheplan can still see
-    what repeats and what changes. Words of one or two characters can collide."""
+    what repeats and what changes."""
     if isinstance(value, dict):
         return {k: scramble(v, salt, k) for k, v in value.items()}
     if isinstance(value, list):
         return [scramble(v, salt, key) for v in value]
     if isinstance(value, str) and key not in _KEEP:
-        def word(m):
-            digest = hashlib.blake2b(m.group().encode(), key=salt).hexdigest()
-            return (digest * (len(m.group()) // len(digest) + 1))[:len(m.group())]
-        return _WORD.sub(word, value)
+        return _WORD.sub(lambda m: _scramble_word(m.group(), salt), value)
     return value
 
 
