@@ -43,8 +43,9 @@ def _advice(v: Verdict) -> list[str]:
     if not v.rules.forecast:
         return ["No cost forecast for this provider: " + v.rules.note + "."]
     if v.rules.mode == "implicit":
-        lines.append(f"Caching is automatic on this model: forecast {v.cost('auto_5m'):.0%} of the price without it. "
-                     "There is nothing to switch on; what you control is how much of the prompt repeats.")
+        lines.append(f"Caching is automatic on this model: forecast {v.cost('auto_5m'):.0%} of the price without it"
+                     + (" (an estimate under the assumptions in the note below). " if v.rules.provider == "gemini" else ". ")
+                     + "There is nothing to switch on; what you control is how much of the prompt repeats.")
         if v.recommended == "auto_1h":
             lines.append(f'Recommendation: set  "prompt_cache_retention": "24h"  - forecast {v.cost("auto_1h"):.0%} ({v.reason}).')
     elif v.recommended == "off":
@@ -130,7 +131,9 @@ def text(v: Verdict, fs: list[Finding], name_width: int = 36) -> str:
         out.append("  Note: the plan was chosen on this same log; use --learn-from for an out-of-sample forecast.")
     if not v.calibration.responses and 0.5 * v.minimum <= v.typical_tokens <= 2 * v.minimum:
         out.append("  Note: prompts are close to the minimum cacheable length, where token estimates decide "
-                   "what is cached. Treat this forecast as rough and run `cacheplan verify`.")
+                   "what is cached. Treat this forecast as rough and "
+                   + ("run `cacheplan verify`." if v.rules.provider == "anthropic"
+                      else "capture with usage recorded to see the forecast check."))
     if fs:
         out += ["", "  Findings"] + ["    " + str(f) for f in fs]
     return "\n".join(out)

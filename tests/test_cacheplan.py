@@ -639,7 +639,10 @@ def test_caching_rules_per_provider_and_model():
     assert claude.minimum == 4096 and claude.forecast
     nova = providers.rules("bedrock", "amazon.nova-pro-v1:0")
     assert nova.write_long is None and not nova.automatic
-    assert not providers.rules("gemini", "gemini-3-flash").forecast
+    gem = providers.rules("gemini", "gemini-3-flash")
+    assert gem.forecast and gem.mode == "implicit" and gem.read_x == pytest.approx(0.1) and "assumes 5 minutes" in gem.note
+    assert providers.rules("gemini", "gemini-4-argon").read_x == pytest.approx(0.05)
+    assert not providers.rules("gemini", "gemini-9-unknown").forecast
     assert not providers.rules("bedrock", "meta.llama4").forecast
 
 
@@ -705,14 +708,18 @@ def test_bedrock_claude_is_forecast_like_anthropic_and_cache_points_are_read():
     assert "logged" in marked.usage and marked.usage["logged"].cache_read_input_tokens > 0
 
 
-def test_nova_has_no_long_lifetime_and_gemini_has_no_forecast(tmp_path, capsys):
+def test_nova_has_no_long_lifetime_and_gemini_is_forecast_under_stated_assumptions(tmp_path, capsys):
     nova = examine(load_rows(converse("amazon.nova-pro-v1:0")))[0]
     assert set(nova.usage) == {"off", "plan_5m"}
-    gem = [{"ts": r["ts"], "app": "bot", "model": "gemini-3-flash", "request": {
+    gem = lambda model: [{"ts": r["ts"], "app": "bot", "model": model, "request": {
         "systemInstruction": {"parts": [{"text": r["request"]["messages"][0]["content"]}]},
         "contents": [{"role": "model" if m["role"] == "assistant" else "user", "parts": [{"text": m["content"]}]}
                      for m in r["request"]["messages"][1:]]}} for r in openai_chat(stamp=True)]
-    path = _write(tmp_path, "gem.jsonl", gem)
+    path = _write(tmp_path, "gem.jsonl", gem("gemini-3-flash"))
+    assert cli.main(["report", path]) == 0
+    out = capsys.readouterr().out
+    assert "assumed 5-minute" in out and "estimate under the assumptions" in out and "is not documented" in out and "CP001" in out
+    path = _write(tmp_path, "unknown.jsonl", gem("gemini-9-unknown"))                 # no built-in price: diagnosis only
     assert cli.main(["report", path]) == 0
     out = capsys.readouterr().out
     assert "No cost forecast" in out and "CP001" in out and "Cost vs no caching" not in out

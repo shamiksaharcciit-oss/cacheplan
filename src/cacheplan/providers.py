@@ -114,13 +114,41 @@ def _bedrock(model: str | None) -> Rules:
                  note="caching rules for this Bedrock model are not built in: diagnosis only")
 
 
+# (fragment, input price, cached-input price) per million tokens: Vertex AI list prices, global
+# endpoint, read 24 November 2026. First match wins.
+_GEMINI = [
+    ("neon", 3.0, 0.15), ("hydrogen", 1.5, 0.075), ("carbon", 2.0, 0.10), ("argon", 2.0, 0.10),
+    ("3.8-flash", 0.75, 0.075), ("3.7-flash", 0.75, 0.075), ("3.6-flash", 0.75, 0.075),
+    ("3.5-flash-lite", 0.30, 0.03), ("3.5-flash", 1.5, 0.15), ("3.1-flash-lite", 0.25, 0.025), ("3.1-pro", 2.0, 0.20),
+    ("3-flash", 0.50, 0.05), ("2.5-pro", 1.25, 0.125), ("2.5-flash-lite", 0.10, 0.01), ("2.5-flash", 0.30, 0.03),
+]
+
+
+def _gemini(model: str | None) -> Rules:
+    """Implicit caching on Gemini. Two things are not documented and are assumed here: that an
+    implicit cache hit is billed at the listed cached-input price, and how long an implicit
+    cache lives (5 minutes is assumed). The forecast is labelled accordingly."""
+    name = (model or "").lower().replace("_", "-")
+    minimum = 2048 if "gemini-2" in name else 4096
+    note = ("the lifetime of Gemini's implicit caches is not documented, so this forecast assumes 5 minutes; "
+            "cache hits are assumed to be billed at the listed cached-input price (Vertex AI list prices); "
+            "explicit caches (cachedContents) are not modelled; Gemini 4 gains a cache-write price on "
+            "12 January 2027, which is not modelled")
+    for fragment, price, cached in _GEMINI:
+        if fragment in name:
+            return Rules("gemini", "implicit", minimum, 0, price, cached / price, 1.0, None, 300, 300,
+                         "assumed 5-minute", "", interval=1, known=True, note=note)
+    return Rules("gemini", "implicit", minimum if "gemini" in name else 2048, 0, None, forecast=False, known="gemini" in name,
+                 note="this Gemini model's prices are not built in: diagnosis only, no cost forecast")
+
+
 DOCS = {
-    "anthropic": "https://docs.claude.com/en/docs/build-with-claude/prompt-caching",
+    "anthropic": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
     "openai": "https://developers.openai.com/api/docs/guides/prompt-caching",
     "bedrock": "https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html",
-    "gemini": "https://ai.google.dev/gemini-api/docs/caching",
+    "gemini": "https://ai.google.dev/gemini-api/docs/caching and https://cloud.google.com/vertex-ai/generative-ai/pricing",
 }
-READ_ON = "2026-11-23"
+READ_ON = "2026-11-24"
 
 
 def _evidence(r: Rules) -> str:
@@ -128,6 +156,8 @@ def _evidence(r: Rules) -> str:
     and `cacheplan providers` cannot drift apart."""
     if not r.forecast:
         return "no forecast"
+    if r.provider == "gemini":
+        return "list prices plus two stated assumptions (cache lifetime, billing of implicit hits); not compared with live billing"
     if r.provider == "anthropic":
         return "live: 14 forecast-vs-billed rows on claude-sonnet-5-5, all within 2 points (2026-11-24)"
     if r.provider == "openai" and r.mode == "implicit":
@@ -144,11 +174,7 @@ def rules(provider: str, model: str | None) -> Rules:
     elif provider == "bedrock":
         r = _bedrock(model)
     elif provider == "gemini":
-        name = (model or "").lower()
-        minimum = 2048 if "gemini-2" in name else 4096 if "gemini" in name else 2048
-        r = Rules("gemini", "implicit", minimum, 0, None, forecast=False, known="gemini" in name,
-                  note="Gemini's documentation does not state the cached-token discount or lifetime: "
-                       "diagnosis only, no cost forecast")
+        r = _gemini(model)
     else:
         r = _anthropic(model)
     return replace(r, source=f"{DOCS[r.provider]} (read {READ_ON})", evidence=_evidence(r))
