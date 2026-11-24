@@ -163,8 +163,8 @@ def _evidence(r: Rules) -> str:
     if r.provider == "openai" and r.mode == "implicit":
         return "live: 2 runs on gpt-5.4-mini, 19% vs 21% and 23% vs 17% with a warm cache (2026-11-23)"
     if r.provider == "openai":
-        return ("live: 2 runs on gpt-5.6-luna, automatic mode only (2026-11-24); breakpoints, the 12-hour "
-                "lifetime and GPT-6.x are documentation only")
+        return ("live: 3 runs on gpt-5.6-luna (2026-11-24): automatic mode 19% vs 19% and 125% vs 125%, explicit "
+                "breakpoints 19% vs 21%; the 12-hour lifetime and GPT-6.x are documentation only")
     return "documentation only; not compared with live billing"
 
 

@@ -286,8 +286,8 @@ client = anthropic.Anthropic(http_client=anthropic.DefaultHttpxClient(
 
 It adds or replaces cache markers and nothing else: no content is changed, moved or
 dropped, and the prompt fix is never applied automatically. If rewriting fails, the request
-goes out as your application built it. Anthropic Messages API only, and tested against a
-stand-in so far, not live traffic. Details: [Applying a plan](docs/apply.md).
+goes out as your application built it. Anthropic Messages API only. One live run so far:
+forecast 15% of the uncached input cost, billed 14%. Details: [Applying a plan](docs/apply.md).
 
 ## Providers
 
@@ -299,7 +299,7 @@ everywhere. What differs is how much of the forecast each provider's documentati
 | Anthropic API | Yes | Yes | Off, automatic, planned breakpoints, prompt fix; 5-minute and 1-hour | Yes |
 | Bedrock, Claude models (Converse, InvokeModel) | Yes | Yes | Same as Anthropic, as `cachePoint` blocks; Bedrock's own minimums | No |
 | Bedrock, Nova | Yes | Yes, set `--price` | Off, planned breakpoints; 5-minute only | No |
-| OpenAI, GPT-5.6 and later | Yes | Yes | Off, automatic, planned breakpoints, prompt fix; 30-minute and 12-hour; writes at 1.25x and 2.5x | Two runs, automatic mode |
+| OpenAI, GPT-5.6 and later | Yes | Yes | Off, automatic, planned breakpoints, prompt fix; 30-minute and 12-hour; writes at 1.25x and 2.5x | Three runs: automatic mode and explicit breakpoints |
 | OpenAI, GPT-5.5 and earlier | Yes | Yes | Automatic only (no write fee, nothing to switch on), prompt fix; in-memory and 24h retention | One run |
 | Gemini | Yes | Estimate under stated assumptions | Automatic only, prompt fix; cache lifetime assumed to be 5 minutes | No |
 
@@ -316,8 +316,9 @@ What to know before relying on the non-Anthropic rows:
   on it. A separate run with a timestamp in the system prompt then confirmed it
   independently: forecast 125%, billed 125%, nothing read. On these models the default
   automatic caching costs more than no caching when the system message changes every
-  request. Breakpoints and the 12-hour
-  lifetime on these models, Bedrock and Gemini are untested.
+  request. A third run with explicit breakpoints in the Responses API was forecast at 19%
+  and billed at 21%. The 12-hour lifetime and GPT-6.x on OpenAI, Bedrock and Gemini are
+  untested.
   The rules were read from each provider's documentation on the same day. If your log has recorded usage,
   the report's forecast check tells you how well the model holds on your own traffic; treat
   the forecast as unconfirmed until you have seen that line.
@@ -507,11 +508,12 @@ Comparison made on 23 November 2026 against promptcachelint 0.1.0 and cachelint 
 
 ## Roadmap
 
-- Live checks for the paths that are documentation only: OpenAI breakpoints and GPT-6.x,
-  Bedrock, Gemini
+- Live checks for the paths that are documentation only: OpenAI's 12-hour lifetime and
+  GPT-6.x, Bedrock, Gemini
 - `verify` for OpenAI
 - Real production exports for the tracing-tool readers
-- Live evidence for the plan wrapper, then a decision on whether it leaves "experimental"
+- More live evidence for the plan wrapper (one run so far), then a decision on whether it
+  leaves "experimental"
 - More frameworks, longer sessions and a second model in the published benchmark
 - Analysing logs larger than memory
 
