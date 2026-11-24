@@ -64,6 +64,7 @@ def _snip(text: str, i: int, width: int = 28) -> str:
 
 def find_breaks(app: str, rows: list[dict]) -> list[Break]:
     out, seen = [], []
+    one_shot = bool(rows and rows[0].get("one_shot"))
     for n, row in enumerate(rows):
         cur = rendered(row).segments
         ids = [x.digest for x in cur]
@@ -82,7 +83,7 @@ def find_breaks(app: str, rows: list[dict]) -> list[Break]:
             out.append(Break(app, n, cur[-1].path if cur else "request", "removed", lost))
             continue
         path, now_t, was_t = cur[best].path, cur[best].text, prev[best].text
-        if path == "messages[0].content[0]":           # a different conversation, not a break
+        if path == "messages[0].content[0]" and not one_shot:   # a different conversation, not a break
             continue
         if path.startswith("tools") and sorted(x.digest for x in prev if x.region == "tools") == \
                 sorted(x.digest for x in cur if x.region == "tools"):

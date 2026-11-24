@@ -86,6 +86,9 @@ def findings(v: Verdict, rows: list[dict], k: Knowledge, show_content: bool = Tr
             what = f"a {g['cause']}" if g["cause"] else "content"
             out.append(Finding("CP007", f"{what} in an earlier message changes between requests "
                                f"({g['count']} times, first at {b.path}){detail}",
+                               ("put the part every query shares in its own content block, or in the system "
+                                "prompt, ahead of the part that changes") if rows and rows[0].get("one_shot")
+                               and b.path.startswith("messages[0]") else
                                "keep earlier messages byte-identical; send changing material "
                                "(file contents, retrieved documents) as late as possible", g["lost_tokens"]))
     if v.rules.mode == "breakpoints" and (v.recommended != "off" or v.fix_option) and \

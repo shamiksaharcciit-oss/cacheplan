@@ -17,7 +17,9 @@ from .render import as_dict, html, text
 def _load(args) -> tuple[list[dict], Knowledge | None]:
     """Rows to analyse, and knowledge learned from another log when --learn-from is given."""
     learn_path = getattr(args, "learn_from", None)
-    log = load([learn_path, *args.logs] if learn_path else args.logs)
+    log = load([learn_path, *args.logs] if learn_path else args.logs,
+               getattr(args, "app_field", None), getattr(args, "session_field", None),
+               not getattr(args, "no_split", False), getattr(args, "one_shot", False))
     for why, n in log.skipped.items():
         print(f"skipped {n} line(s): {why}", file=sys.stderr)
     if not log.rows:
@@ -254,6 +256,15 @@ def main(argv: list[str] | None = None) -> int:
         if model:
             p.add_argument("--model", default=None,
                            help="model id, used for the minimum and prices when the log does not name one")
+        p.add_argument("--app-field", metavar="PATH",
+                       help="where each log line names its application, as a dotted path (e.g. metadata.route)")
+        p.add_argument("--session-field", metavar="PATH",
+                       help="where each log line names its conversation (e.g. metadata.session_id)")
+        p.add_argument("--no-split", action="store_true",
+                       help="keep one application per label; do not split by system prompt")
+        p.add_argument("--one-shot", action="store_true",
+                       help="requests are independent queries, not conversations: a change in the "
+                            "first message counts as a prefix break")
         if learn:
             p.add_argument("--learn-from", metavar="LOG",
                            help="learn the plan from this other log (out-of-sample forecast)")

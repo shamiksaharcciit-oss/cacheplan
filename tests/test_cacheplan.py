@@ -873,3 +873,25 @@ def test_scrambling_never_makes_two_short_values_look_the_same():
         assert len(seen) == 400
         assert all(len(scramble(w, salt)) == len(w) for w in ("a", "Zz", "2026", "abcdef", "abcdefg", "naïve"))
         assert scramble("id 7 id 7", salt).split()[1] == scramble("7", salt)
+
+
+def test_grouping_controls(tmp_path):
+    """Labels and conversation ids can come from any field; prompt splitting can be turned
+    off; one-shot workloads report a change in the first message."""
+    doc = "Reference manual. " + "section text " * 600
+    rows = [{"ts": float(i), "metadata": {"route": "search" if i % 2 else "chat", "thread": f"t{i // 4}"},
+             "request": {"model": "claude-sonnet-5-5", "system": "Answer from the manual." if i % 2 else "Chat politely with the user please.",
+                         "messages": [{"role": "user", "content": (doc if i < 6 else doc.replace("Reference", "Updated")) + f" Question {i}?"}]}}
+            for i in range(12)]
+    path = _write(tmp_path, "mixed.jsonl", rows)
+    assert {r["app"] for r in load(path).rows} == {'mixed#1 "Chat politely with the user please."', 'mixed#2 "Answer from the manual."'}
+    assert {r["app"] for r in load(path, split_prompts=False).rows} == {"mixed"}
+    by_field = load(path, app_field="metadata.route", session_field="metadata.thread").rows
+    assert {r["app"] for r in by_field} == {"search", "chat"} and by_field[5]["session"] == "t1"
+    raw = _write(tmp_path, "raw.jsonl", [dict(r["request"], metadata={"user_id": "u7"}) for r in rows])
+    assert {r["session"] for r in load(raw, session_field="metadata.user_id").rows} == {"u7"}
+    chat = [r for r in load(path, app_field="metadata.route").rows if r["app"] == "chat"]
+    assert not find_breaks("chat", chat)                                   # read as separate conversations
+    shots = [r for r in load(path, app_field="metadata.route", one_shot=True).rows if r["app"] == "chat"]
+    assert [b.path for b in find_breaks("chat", shots)].count("messages[0].content[0]") >= 1
+    assert cli.main(["report", path, "--app-field", "metadata.route", "--one-shot", "--no-split"]) == 0

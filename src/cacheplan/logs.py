@@ -25,7 +25,21 @@ class Log:
     skipped: dict[str, int] = field(default_factory=dict)
 
 
-def _row(d: dict, default_app: str, n: int) -> dict | str:
+def _field(d: dict, raw_request: dict, path: str | None):
+    """A value named by a dotted path, looked up in the log line and then in the request
+    body (so `metadata.user_id` or `prompt_cache_key` work on raw request bodies)."""
+    if not path:
+        return None
+    for start in (d, raw_request):
+        cur = start
+        for part in path.split("."):
+            cur = cur.get(part) if isinstance(cur, dict) else None
+        if cur is not None and not isinstance(cur, (dict, list)):
+            return str(cur)
+    return None
+
+
+def _row(d: dict, default_app: str, n: int, app_field: str | None = None, session_field: str | None = None) -> dict | str:
     from .providers import normalise
     if not isinstance(d, dict):
         return "not a JSON object"
@@ -40,6 +54,7 @@ def _row(d: dict, default_app: str, n: int) -> dict | str:
         req, ts, app, session = d, None, None, None
     else:
         return "no request found"
+    raw = req
     try:
         provider, req = normalise(req, provider)
     except (AttributeError, TypeError, KeyError):
@@ -49,6 +64,8 @@ def _row(d: dict, default_app: str, n: int) -> dict | str:
     if model and not req.get("model"):
         req = dict(req, model=model)
     req = share_blocks(req)
+    app = _field(d, raw, app_field) or app
+    session = _field(d, raw, session_field) or session
     return {"ts": float(ts) if ts else float(n), "app": app or default_app, "session": session,
             "request": req, "usage": usage, "provider": provider, "_rendered": None}
 
@@ -57,10 +74,16 @@ def _lines(text: str) -> set[str]:
     return {l for l in text.split("\n") if len(l.strip()) >= 12}
 
 
-def load(paths) -> Log:
+def load(paths, app_field: str | None = None, session_field: str | None = None,
+         split_prompts: bool = True, one_shot: bool = False) -> Log:
     """Load one or more logs. Requests under one app label are split further when their
     system prompts are different prompts altogether (an agent's main prompt and its
-    commit-message prompt, say), so that each group is one prompt template."""
+    commit-message prompt, say), so that each group is one prompt template.
+
+    app_field / session_field: dotted paths naming where each line keeps its application
+    label and conversation id. split_prompts=False keeps one application per label.
+    one_shot=True says the requests are independent queries, not growing conversations, so a
+    change in the first message counts as a prefix break."""
     log, skipped = Log(), defaultdict(int)
     for src, path in enumerate([paths] if isinstance(paths, (str, Path)) else list(paths)):
         p = Path(path)
@@ -68,13 +91,14 @@ def load(paths) -> Log:
             if not line.strip():
                 continue
             try:
-                row = _row(json.loads(line), p.stem, n)
+                row = _row(json.loads(line), p.stem, n, app_field, session_field)
             except json.JSONDecodeError:
                 row = "invalid JSON"
             if isinstance(row, str):
                 skipped[row] += 1
                 continue
             row["_src"] = src
+            row["one_shot"] = one_shot
             if row["provider"] != "anthropic" and not row["app"].endswith(f"[{row['provider']}]"):
                 row["app"] = f"{row['app']} [{row['provider']}]"
             log.rows.append(row)
@@ -92,7 +116,7 @@ def load(paths) -> Log:
         r["_cluster"] = k
     for r in log.rows:
         k = r.pop("_cluster")
-        if len(clusters[r["app"]]) > 1:
+        if split_prompts and len(clusters[r["app"]]) > 1:
             first = system_text(r["request"]).strip().split("\n")[0][:40]
             r["app"] = f'{r["app"]}#{k + 1} "{first}"'
     log.skipped = dict(skipped)
