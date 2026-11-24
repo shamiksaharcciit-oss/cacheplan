@@ -448,6 +448,19 @@ session, so read it as "on a par with hand-tuned caching", not as a win. Claude 
 its ceiling already (27%, local forecast only, never measured), and `cacheplan` recommended
 changing nothing.
 
+A real agent on both providers: [Hermes Agent](https://github.com/NousResearch/hermes-agent)
+v0.23.4, one short interactive session each, captured through the proxy on 24 November 2026.
+Hermes manages its own caching, and the report recommended changing nothing in both cases:
+
+| Application | Option | Forecast | Measured |
+| --- | --- | --- | --- |
+| Hermes Agent on `claude-sonnet-5-5` (11 requests, ~17,900 tokens each) | Hermes's own cache markers, as logged | 16% | 16% |
+| Hermes Agent on `gpt-5.6-luna` (13 requests, ~11,000 tokens each) | Automatic caching, as logged | 20% | 20% |
+
+In both sessions the share of tokens read from the cache equalled the share that repeats at
+all (90% and 91%), so Hermes was at its ceiling. These sessions had a few seconds between
+requests; they say nothing about an agent that waits minutes between turns.
+
 ## Speed and memory
 
 Measured with [`benchmarks/scale/scale.py`](benchmarks/scale/scale.py) on a 2-core cloud

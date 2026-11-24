@@ -10,6 +10,8 @@
 - The plan wrapper has its first live run: forecast 15%, billed 14% behind the wrapper.
 - OpenAI explicit breakpoints have their first live run on gpt-5.6-luna: forecast 19%,
   billed 21%.
+- Hermes Agent v0.23.4 captured on Anthropic and OpenAI: at its ceiling on both, forecasts
+  16% and 20% against 16% and 20% billed.
 - Drivers for live checks: `benchmarks/providers/anthropic_driver.py` (with `--plan` for the
   wrapper) and `openai_driver.py --explicit` (Responses API with explicit breakpoints).
 
