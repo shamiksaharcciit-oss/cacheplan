@@ -18,7 +18,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CHILD = r'''
-import json, resource, sys, time
+import json, sys, time
+try:
+    import resource
+except ImportError:                     # Windows: no peak-memory figure
+    resource = None
 sys.path[:0] = [sys.argv[2] + "/src", sys.argv[2]]
 from cacheplan.findings import findings
 from cacheplan.forecast import examine, learn_from
@@ -28,7 +32,7 @@ a = time.perf_counter(); rows = load(sys.argv[1]).rows; t["load"] = time.perf_co
 a = time.perf_counter(); k = learn_from(rows); t["learn and plan"] = time.perf_counter() - a
 a = time.perf_counter(); verdicts = examine(rows, k); t["forecast and diagnose"] = time.perf_counter() - a
 a = time.perf_counter(); apps = by_app(rows); n = sum(len(findings(v, apps[v.app], k)) for v in verdicts); t["findings"] = time.perf_counter() - a
-peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss if resource else 0
 print(json.dumps({"requests": len(rows), "apps": len(verdicts), "seconds": t,
                   "peak_mb": peak / (1024 if sys.platform != "darwin" else 1024 * 1024)}))
 '''
@@ -67,7 +71,7 @@ def main() -> int:
             r = json.loads(out.stdout.strip().splitlines()[-1])
             s = r["seconds"]
             print(f"| {r['requests']:,} | {size / 1e6:.0f} MB | {s['load']:.1f} s | {s['learn and plan']:.1f} s | "
-                  f"{s['forecast and diagnose']:.1f} s | {s['findings']:.1f} s | {sum(s.values()):.1f} s | {r['peak_mb']:,.0f} MB |", flush=True)
+                  f"{s['forecast and diagnose']:.1f} s | {s['findings']:.1f} s | {sum(s.values()):.1f} s | " + (f"{r['peak_mb']:,.0f} MB |" if r['peak_mb'] else "not measured |"), flush=True)
             log.unlink()
     return 0
 
