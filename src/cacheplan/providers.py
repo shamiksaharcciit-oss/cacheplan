@@ -103,13 +103,13 @@ def _bedrock(model: str | None) -> Rules:
     name = (model or "").lower().replace(".", "-")
     if "nova" in name:
         return Rules("bedrock", "breakpoints", 1000, 0, None, 0.10, 1.25, None, known=True, automatic=False,
-                     note="Nova: 5-minute lifetime only, system and messages only, at most 20K cached tokens; "
+                     note="5-minute lifetime only, system and messages only, at most 20K cached tokens; "
                           "prices are not built in, set --price")
     if "claude" in name or "anthropic" in name:
         base = _anthropic(name)
         minimum = next((m for frag, m in _BEDROCK_MIN if frag in name), base.minimum)
         return replace(base, provider="bedrock", minimum=minimum,
-                       note="Claude on Bedrock: Anthropic's prices are assumed; check your Bedrock rates")
+                       note="Anthropic's prices are assumed; check your Bedrock rates")
     return Rules("bedrock", "breakpoints", 1024, 0, None, forecast=False,
                  note="caching rules for this Bedrock model are not built in: diagnosis only")
 
@@ -148,7 +148,7 @@ DOCS = {
     "bedrock": "https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html",
     "gemini": "https://ai.google.dev/gemini-api/docs/caching and https://cloud.google.com/vertex-ai/generative-ai/pricing",
 }
-READ_ON = "2026-11-24"
+READ_ON = "2026-11-23 and 24"
 
 
 def _evidence(r: Rules) -> str:

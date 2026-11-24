@@ -1,9 +1,12 @@
-# Publishes to PyPI when a GitHub release is published.
+# Publishes to PyPI when a v* tag is pushed or a GitHub release is published.
+# Whichever happens second finds the files already there and does nothing.
 # Uses PyPI trusted publishing: no token is stored anywhere.
 # One-time setup on pypi.org: add this repository and workflow as a trusted publisher
 # for the project "cacheplan", with environment name "pypi".
 name: release
 on:
+  push:
+    tags: ["v*"]
   release:
     types: [published]
 permissions:
@@ -34,3 +37,5 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # release/v1
+        with:
+          skip-existing: true

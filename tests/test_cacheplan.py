@@ -1039,3 +1039,10 @@ def test_plan_wrapper_adds_markers_and_changes_nothing_else(tmp_path, capsys):
     assert apply._rewritten(broken, entry) is broken                                        # fails open
     with pytest.raises(ValueError, match="Pass app="):
         apply.load(plan_file, app="someone-else")
+
+
+def test_provider_page_is_generated_from_the_rules_in_use():
+    from pathlib import Path
+    page = Path(__file__).resolve().parent.parent / "docs" / "providers.md"
+    assert page.read_text(encoding="utf-8") == cli.ledger_markdown(), \
+        "docs/providers.md is out of date: run `cacheplan providers --markdown > docs/providers.md`"

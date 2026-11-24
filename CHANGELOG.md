@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.4.0a1
+
+- **Reads exports from Langfuse, LangSmith, OpenTelemetry and LiteLLM.** The report says when
+  a log came from a tracer, because a trace is not always what the provider received. The
+  readers follow the formats' documentation and have not been run on real production
+  exports yet.
+- **Faster and lighter.** Each request is rendered once into typed segments, every caching
+  option is a set of breakpoint positions over that rendering, and blocks repeated across a
+  log are stored once. 1,000 requests: 3.0 s to 0.7 s. 100,000 requests (1 GB): about 68 s
+  and 2.7 GB of memory. `benchmarks/scale/scale.py` reproduces the table.
+- **Grouping controls:** `--app-field`, `--session-field`, `--no-split`, and `--one-shot` for
+  workloads of independent queries.
+- **`cacheplan plan --save` and an experimental wrapper** (`cacheplan.apply.PlanTransport`)
+  that adds the planned cache markers to live Anthropic requests. It never changes content
+  and never applies the prompt fix. Tested against a stand-in only.
+- **Gemini gets a forecast under two stated assumptions** (how implicit cache hits are
+  billed, and a 5-minute cache lifetime), from list prices. It is labelled as an estimate.
+- `cacheplan providers --markdown` generates `docs/providers.md`; a test keeps them in step.
+- Benchmark: `--long` sessions, `--model`, and named runs that leave the published table alone.
+- Pushing a `v*` tag now publishes to PyPI; a GitHub Release still works.
+- New `docs/` pages and `CONTRIBUTING.md`.
+- Fixed: every request was counted one token too large (an empty uncached tail was
+  estimated as one token).
+- Changed: `place_breakpoints` and the prompt fix leave untouched plain-string messages as
+  strings instead of turning every message into a block list.
+
 ## 0.3.0a2
 
 - **OpenAI GPT-6.2 and later: top-level `instructions` are no longer treated as a cacheable

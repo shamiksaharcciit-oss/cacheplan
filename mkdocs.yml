@@ -1,0 +1,12 @@
+site_name: cacheplan
+site_description: Diagnose LLM prompt caching, forecast what each setting would cost, and plan the fix.
+repo_url: https://github.com/shamiksaharcciit-oss/cacheplan
+docs_dir: docs
+nav:
+  - Overview: README.md
+  - Logs from tracing tools: exports.md
+  - Grouping: grouping.md
+  - Applying a plan: apply.md
+  - Providers: providers.md
+  - Speed and memory: scaling.md
+  - How it works inside: internals.md
