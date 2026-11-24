@@ -45,7 +45,7 @@ def cmd_report(a) -> int:
         print(f"cacheplan {__version__}: {len(rows)} requests, {len(results)} application(s). "
               "Forecasts come from a local model of each provider's caching rules"
               + ("; confirm with `cacheplan verify`.\n" if all(v.rules.provider == "anthropic" for v in verdicts)
-                 else ". Only the Anthropic API rules have been checked against live traffic.\n"))
+                 else ". How far each provider's rules have been checked live: `cacheplan providers`.\n"))
         shown = [(v, f) for v, f in results if v.requests >= 3 or len(results) == 1]
         print("\n\n".join(text(v, f) for v, f in shown))
         if len(shown) < len(results):
