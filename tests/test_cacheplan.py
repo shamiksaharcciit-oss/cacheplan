@@ -251,6 +251,8 @@ def test_fix_keeps_messages_tools_and_api_rules(corpus_rows):
         assert [m["role"] for m in c["messages"]] == [m["role"] for m in row["request"]["messages"]]
         assert 1 <= sum(1 for _, ttl in prefix_blocks(c) if ttl) <= 4
         for m in c["messages"]:
+            if isinstance(m["content"], str):               # untouched messages keep their form
+                continue
             kinds = [b["type"] for b in m["content"]]
             if "tool_result" in kinds:
                 assert kinds[0] == "tool_result"
@@ -637,7 +639,10 @@ def test_caching_rules_per_provider_and_model():
     assert claude.minimum == 4096 and claude.forecast
     nova = providers.rules("bedrock", "amazon.nova-pro-v1:0")
     assert nova.write_long is None and not nova.automatic
-    assert not providers.rules("gemini", "gemini-3-flash").forecast
+    gem = providers.rules("gemini", "gemini-3-flash")
+    assert gem.forecast and gem.mode == "implicit" and gem.read_x == pytest.approx(0.1) and "assumes 5 minutes" in gem.note
+    assert providers.rules("gemini", "gemini-4-argon").read_x == pytest.approx(0.05)
+    assert not providers.rules("gemini", "gemini-9-unknown").forecast
     assert not providers.rules("bedrock", "meta.llama4").forecast
 
 
@@ -703,14 +708,18 @@ def test_bedrock_claude_is_forecast_like_anthropic_and_cache_points_are_read():
     assert "logged" in marked.usage and marked.usage["logged"].cache_read_input_tokens > 0
 
 
-def test_nova_has_no_long_lifetime_and_gemini_has_no_forecast(tmp_path, capsys):
+def test_nova_has_no_long_lifetime_and_gemini_is_forecast_under_stated_assumptions(tmp_path, capsys):
     nova = examine(load_rows(converse("amazon.nova-pro-v1:0")))[0]
     assert set(nova.usage) == {"off", "plan_5m"}
-    gem = [{"ts": r["ts"], "app": "bot", "model": "gemini-3-flash", "request": {
+    gem = lambda model: [{"ts": r["ts"], "app": "bot", "model": model, "request": {
         "systemInstruction": {"parts": [{"text": r["request"]["messages"][0]["content"]}]},
         "contents": [{"role": "model" if m["role"] == "assistant" else "user", "parts": [{"text": m["content"]}]}
                      for m in r["request"]["messages"][1:]]}} for r in openai_chat(stamp=True)]
-    path = _write(tmp_path, "gem.jsonl", gem)
+    path = _write(tmp_path, "gem.jsonl", gem("gemini-3-flash"))
+    assert cli.main(["report", path]) == 0
+    out = capsys.readouterr().out
+    assert "assumed 5-minute" in out and "estimate under the assumptions" in out and "is not documented" in out and "CP001" in out
+    path = _write(tmp_path, "unknown.jsonl", gem("gemini-9-unknown"))                 # no built-in price: diagnosis only
     assert cli.main(["report", path]) == 0
     out = capsys.readouterr().out
     assert "No cost forecast" in out and "CP001" in out and "Cost vs no caching" not in out
@@ -871,3 +880,169 @@ def test_scrambling_never_makes_two_short_values_look_the_same():
         assert len(seen) == 400
         assert all(len(scramble(w, salt)) == len(w) for w in ("a", "Zz", "2026", "abcdef", "abcdefg", "naïve"))
         assert scramble("id 7 id 7", salt).split()[1] == scramble("7", salt)
+
+
+def test_grouping_controls(tmp_path):
+    """Labels and conversation ids can come from any field; prompt splitting can be turned
+    off; one-shot workloads report a change in the first message."""
+    doc = "Reference manual. " + "section text " * 600
+    rows = [{"ts": float(i), "metadata": {"route": "search" if i % 2 else "chat", "thread": f"t{i // 4}"},
+             "request": {"model": "claude-sonnet-5-5", "system": "Answer from the manual." if i % 2 else "Chat politely with the user please.",
+                         "messages": [{"role": "user", "content": (doc if i < 6 else doc.replace("Reference", "Updated")) + f" Question {i}?"}]}}
+            for i in range(12)]
+    path = _write(tmp_path, "mixed.jsonl", rows)
+    assert {r["app"] for r in load(path).rows} == {'mixed#1 "Chat politely with the user please."', 'mixed#2 "Answer from the manual."'}
+    assert {r["app"] for r in load(path, split_prompts=False).rows} == {"mixed"}
+    by_field = load(path, app_field="metadata.route", session_field="metadata.thread").rows
+    assert {r["app"] for r in by_field} == {"search", "chat"} and by_field[5]["session"] == "t1"
+    raw = _write(tmp_path, "raw.jsonl", [dict(r["request"], metadata={"user_id": "u7"}) for r in rows])
+    assert {r["session"] for r in load(raw, session_field="metadata.user_id").rows} == {"u7"}
+    chat = [r for r in load(path, app_field="metadata.route").rows if r["app"] == "chat"]
+    assert not find_breaks("chat", chat)                                   # read as separate conversations
+    shots = [r for r in load(path, app_field="metadata.route", one_shot=True).rows if r["app"] == "chat"]
+    assert [b.path for b in find_breaks("chat", shots)].count("messages[0].content[0]") >= 1
+    assert cli.main(["report", path, "--app-field", "metadata.route", "--one-shot", "--no-split"]) == 0
+
+
+# ------------------------------------------------------------------ exports from tracing tools
+def _traced(n=3, steps=4):
+    """(ts, session, system, turns): conversations with a timestamp in the system prompt."""
+    for t, c, s, turns in _turns(n, steps):
+        yield 1795000000 + t, f"conv-{c}", RULEBOOK + f"\nCurrent time: 2026-11-23T10:{c:02d}:{s:02d}", turns
+
+
+def _check_export(tmp_path, capsys, name, text, source, provider, expect_usage=True):
+    path = tmp_path / name
+    path.write_text(text, encoding="utf-8")
+    log = load(str(path))
+    assert len(log.rows) == 12, log.skipped
+    row = log.rows[5]
+    assert row["source"] == source and row["provider"] == provider and row["session"] == "conv-1"
+    assert system_text(row["request"]).startswith("You are a support agent.") and row["ts"] > 1.7e9
+    assert [m["role"] for m in row["request"]["messages"]][:2] == ["user", "assistant"]
+    if expect_usage:
+        from cacheplan.logs import real_usage
+        u = real_usage(row)
+        assert (u.input_tokens, u.cache_read_input_tokens) == (900, 100)
+    assert cli.main(["report", str(path)]) == 0
+    out = capsys.readouterr().out
+    assert "CP001" in out and f"read from a {source} export" in out
+    return log
+
+
+def test_reads_a_litellm_log(tmp_path, capsys):
+    rows = [{"id": f"r{i}", "trace_id": "t", "session_id": session, "call_type": "acompletion", "startTime": ts, "endTime": ts + 1,
+             "model": "anthropic/claude-sonnet-5-5", "custom_llm_provider": "anthropic", "prompt_tokens": 1000, "total_tokens": 1010,
+             "messages": [{"role": "system", "content": system}] + [{"role": r, "content": x} for r, x in turns],
+             "model_parameters": {"tools": [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]},
+             "metadata": {"usage_object": {"prompt_tokens": 1000, "prompt_tokens_details": {"cached_tokens": 100}}},
+             "response": {"choices": []}} for i, (ts, session, system, turns) in enumerate(_traced())]
+    rows.append({"id": "e", "call_type": "aembedding", "startTime": 1.0, "model": "text-embedding-3", "messages": ["x"]})
+    log = _check_export(tmp_path, capsys, "litellm.jsonl", "\n".join(json.dumps(r) for r in rows), "litellm", "anthropic")
+    assert log.skipped == {"not a model call": 1} and log.rows[0]["request"]["tools"][0]["name"] == "lookup"
+
+
+def test_reads_a_langfuse_export(tmp_path, capsys):
+    rows = [{"id": f"o{i}", "trace_id": f"t{i}", "session_id": session, "type": "GENERATION", "name": "chat",
+             "start_time": datetime_text(ts), "provided_model_name": "gpt-5.4",
+             "input": json.dumps([{"role": "system", "content": system}] + [{"role": r, "content": x} for r, x in turns]),
+             "output": "{}", "usage_details": {"input": 1000, "output": 5, "input_cached_tokens": 100},
+             "model_parameters": "{}", "metadata": {}} for i, (ts, session, system, turns) in enumerate(_traced())]
+    rows.insert(3, {"id": "s", "trace_id": "t0", "type": "SPAN", "name": "retrieve", "input": "q", "start_time": datetime_text(0)})
+    log = _check_export(tmp_path, capsys, "langfuse.json", json.dumps(rows), "langfuse", "openai")       # a JSON array file
+    assert log.skipped == {"not a model call": 1}
+
+
+def test_reads_a_langsmith_export(tmp_path, capsys):
+    def lc(kind, text):
+        return {"lc": 1, "type": "constructor", "id": ["langchain", "schema", "messages", kind], "kwargs": {"content": text}}
+    rows = [{"id": f"run{i}", "run_type": "llm", "name": "ChatAnthropic", "trace_id": f"t{i}", "session_id": "project-uuid",
+             "start_time": datetime_text(ts).replace(" ", "T"),
+             "inputs": {"messages": [[lc("SystemMessage", system)] + [lc("HumanMessage" if r == "user" else "AIMessage", x) for r, x in turns]]},
+             "outputs": {"usage_metadata": {"input_tokens": 1000, "input_token_details": {"cache_read": 100}}},
+             "extra": {"invocation_params": {"model": "claude-sonnet-5-5", "_type": "anthropic-chat"},
+                       "metadata": {"ls_provider": "anthropic", "ls_model_name": "claude-sonnet-5-5", "thread_id": session}}}
+            for i, (ts, session, system, turns) in enumerate(_traced())]
+    rows.append({"id": "c", "run_type": "chain", "name": "agent", "inputs": {}, "outputs": {}})
+    _check_export(tmp_path, capsys, "langsmith.jsonl", "\n".join(json.dumps(r) for r in rows), "langsmith", "anthropic")
+
+
+def test_reads_opentelemetry_spans_in_three_conventions(tmp_path, capsys):
+    def attr(k, v):
+        return {"key": k, "value": {"intValue": str(v)} if isinstance(v, int) else {"stringValue": v}}
+    spans = []
+    for ts, session, system, turns in _traced():
+        spans.append({"name": "chat gpt-5.4", "traceId": "abc", "startTimeUnixNano": str(int(ts * 1e9)), "attributes": [
+            attr("gen_ai.provider.name", "openai"), attr("gen_ai.request.model", "gpt-5.4"), attr("gen_ai.conversation.id", session),
+            attr("gen_ai.system_instructions", json.dumps([{"type": "text", "content": system}])),
+            attr("gen_ai.input.messages", json.dumps([{"role": r, "parts": [{"type": "text", "content": x}]} for r, x in turns])),
+            attr("gen_ai.usage.input_tokens", 1000), attr("gen_ai.usage.cache_read.input_tokens", 100)]})
+    otlp = {"resourceSpans": [{"resource": {"attributes": [attr("service.name", "bot")]}, "scopeSpans": [
+        {"spans": spans + [{"name": "GET /health", "attributes": [attr("http.method", "GET")]}]}]}]}
+    log = _check_export(tmp_path, capsys, "otlp.json", json.dumps(otlp), "opentelemetry", "openai")
+    assert log.rows[0]["app"].startswith("bot")
+
+    flat = []                                                # OpenLLMetry and OpenInference, as flat span lines
+    for n, (ts, session, system, turns) in enumerate(_traced()):
+        msgs = [("system", system)] + turns
+        if n % 2:
+            a = {"gen_ai.system": "Anthropic", "gen_ai.request.model": "claude-sonnet-5-5", "session.id": session,
+                 "gen_ai.usage.prompt_tokens": 1000, "gen_ai.usage.cache_read_input_tokens": 100}
+            for i, (r, x) in enumerate(msgs):
+                a[f"gen_ai.prompt.{i}.role"], a[f"gen_ai.prompt.{i}.content"] = r, x
+        else:
+            a = {"llm.provider": "anthropic", "llm.model_name": "claude-sonnet-5-5", "session.id": session,
+                 "llm.token_count.prompt": 1000, "llm.token_count.prompt_details.cache_read": 100}
+            for i, (r, x) in enumerate(msgs):
+                a[f"llm.input_messages.{i}.message.role"], a[f"llm.input_messages.{i}.message.content"] = r, x
+        flat.append({"name": "llm", "start_time": datetime_text(ts).replace(" ", "T") + "Z", "attributes": a})
+    _check_export(tmp_path, capsys, "spans.jsonl", "\n".join(json.dumps(s) for s in flat), "opentelemetry", "anthropic")
+
+
+def datetime_text(ts):
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")
+
+
+def test_plan_wrapper_adds_markers_and_changes_nothing_else(tmp_path, capsys):
+    httpx = pytest.importorskip("httpx")
+    from cacheplan import apply
+    log = _write(tmp_path, "agent.jsonl", inserting_agent(8))
+    plan_file = str(tmp_path / "plan.json")
+    assert cli.main(["plan", log, "--save", plan_file, "--model", "claude-sonnet-5-5"]) == 0
+    saved = json.loads(open(plan_file).read())
+    assert "policy" not in json.dumps(saved) and len(saved["applications"]) == 1          # no prompt text
+    entry = apply.load(plan_file)
+    assert entry["action"] == "plan" and entry["plan"]
+
+    seen = []
+
+    def upstream_reply(request):
+        seen.append(request)
+        return httpx.Response(200, json={"usage": {"input_tokens": 1}})
+    client = httpx.Client(transport=apply.PlanTransport(plan_file, inner=httpx.MockTransport(upstream_reply)))
+    original = dict(inserting_agent(8)[5]["request"], model="claude-sonnet-5-5", max_tokens=64, temperature=0)
+    client.post("https://api.anthropic.com/v1/messages", headers={"x-api-key": "k"}, json=original)
+    client.post("https://api.anthropic.com/v1/messages/count_tokens", json=original)       # other paths pass through
+    sent = json.loads(seen[0].content)
+    assert int(seen[0].headers["content-length"]) == len(seen[0].content) and seen[0].headers["x-api-key"] == "k"
+    assert 1 <= sum(1 for _, ttl in prefix_blocks(sent) if ttl) <= 4
+    same = lambda a, b: [t for t, _ in prefix_blocks(a)] == [t for t, _ in prefix_blocks(b)]
+    assert same(sent, original)                                                             # same content, same order
+    assert (sent["model"], sent["max_tokens"], sent["temperature"]) == ("claude-sonnet-5-5", 64, 0)
+    assert json.loads(seen[1].content) == original
+
+    auto = apply.rewrite(original, {"action": "auto", "lifetime": "1h"})
+    assert auto["cache_control"] == {"type": "ephemeral", "ttl": "1h"} and same(auto, original)
+    assert apply.rewrite(original, {"action": "off"}) is original
+    broken = httpx.Request("POST", "https://api.anthropic.com/v1/messages", content=b"not json")
+    assert apply._rewritten(broken, entry) is broken                                        # fails open
+    with pytest.raises(ValueError, match="Pass app="):
+        apply.load(plan_file, app="someone-else")
+
+
+def test_provider_page_is_generated_from_the_rules_in_use():
+    from pathlib import Path
+    page = Path(__file__).resolve().parent.parent / "docs" / "providers.md"
+    assert page.read_text(encoding="utf-8") == cli.ledger_markdown(), \
+        "docs/providers.md is out of date: run `cacheplan providers --markdown > docs/providers.md`"

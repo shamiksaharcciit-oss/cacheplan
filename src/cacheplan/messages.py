@@ -15,6 +15,7 @@ of the latest user message (volatile values).
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field
@@ -74,28 +75,182 @@ def tail_text(req: dict) -> str:
     return "".join(json.dumps(_strip(b), sort_keys=True) for b in req.get("uncached_tail") or [])
 
 
+# --------------------------------------------------------------------------- cache regions
+@dataclass(frozen=True)
+class Segment:
+    """One block of a request as the provider's cache sees it."""
+    path: str                 # e.g. system[0] or messages[8].content[0]
+    text: str                 # the block, serialised without cache markers
+    digest: bytes             # of text; equal digests mean equal blocks
+    tokens: int               # estimate, before calibration
+    marker: int               # lifetime of the breakpoint on this block (FIVE_MIN, ONE_HOUR) or 0
+    unit: str                 # the message it belongs to: "tools", "system" or "messages[i]"
+
+    @property
+    def region(self) -> str:
+        return self.unit.split("[")[0]
+
+
+@dataclass
+class Rendered:
+    """A request in the order the provider hashes it (tools, system, messages), plus what it
+    bills but never caches. Built once per request; every caching option is then a different
+    set of breakpoint positions over the same segments."""
+    segments: list[Segment]
+    hashes: list[bytes]       # hashes[i] identifies the prefix that ends with segment i
+    cum: list[int]            # estimated tokens up to and including segment i
+    tail_tokens: int          # billed after the conversation, never cached (see tail_text)
+    has_tools: bool
+
+    @property
+    def tokens(self) -> int:
+        return (self.cum[-1] if self.cum else 0) + self.tail_tokens
+
+    @property
+    def head(self) -> int:
+        """Number of leading tools and system segments."""
+        return sum(1 for s in self.segments if s.region != "messages")
+
+    def markers(self) -> list[tuple[int, int]]:
+        """(segment index, lifetime) of the breakpoints the request carries."""
+        return [(i, s.marker) for i, s in enumerate(self.segments) if s.marker]
+
+    def ends_message(self, i: int) -> bool:
+        s = self.segments[i]
+        return s.region != "tools" and (i + 1 == len(self.segments) or self.segments[i + 1].unit != s.unit)
+
+
+_POOL: dict[object, object] = {}              # a block's text or digest -> the one shared copy of it
+_POOLED: dict[int, object] = {}               # id of a shared copy -> itself (keeps ids unique)
+_CORE: dict[tuple[str, int], tuple[str, bytes, int]] = {}
+
+
+def _share(block):
+    """Requests in a log repeat most of their content. Keeping one copy of each distinct
+    block cuts memory several-fold and lets its serialised form be computed once."""
+    if isinstance(block, str):
+        key = block
+    elif isinstance(block, dict):
+        key = hashlib.blake2b(json.dumps(block, sort_keys=True).encode(), digest_size=16).digest()
+    else:
+        return block
+    kept = _POOL.get(key)
+    if kept is None:
+        kept = _POOL[key] = block
+        _POOLED[id(kept)] = kept
+    return kept
+
+
+def share_blocks(req: dict) -> dict:
+    """Replace the blocks of a freshly parsed request with shared copies. The request must
+    not be modified in place afterwards; everything in this package copies before changing."""
+    out = dict(req)
+    for name in ("tools", "uncached_tail"):
+        if isinstance(out.get(name), list):
+            out[name] = [_share(t) for t in out[name]]
+    s = out.get("system")
+    if isinstance(s, (str, list)):
+        out["system"] = _share(s) if isinstance(s, str) else [_share(b) for b in s]
+    if isinstance(out.get("messages"), list):
+        msgs = []
+        for m in out["messages"]:
+            if isinstance(m, dict) and isinstance(m.get("content"), (str, list)):
+                c = m["content"]
+                m = dict(m, content=_share(c) if isinstance(c, str) else [_share(b) for b in c])
+            msgs.append(m)
+        out["messages"] = msgs
+    return out
+
+
+def _core(prefix: str, block) -> tuple[str, bytes, int]:
+    """(text, digest, tokens) of one block. Cached for shared blocks."""
+    shared = _POOLED.get(id(block)) is block
+    if shared:
+        hit = _CORE.get((prefix, id(block)))
+        if hit:
+            return hit
+    body = {"type": "text", "text": block} if isinstance(block, str) else _strip(block)
+    text = prefix + ":" + json.dumps(body, sort_keys=True)
+    core = (text, hashlib.blake2b(text.encode(), digest_size=12).digest(), est_tokens(text))
+    if shared:
+        _CORE[(prefix, id(block))] = core
+    return core
+
+
+def _marker(block) -> int:
+    return _ttl(block) if isinstance(block, dict) else 0
+
+
+def render(req: dict) -> Rendered:
+    segs: list[Segment] = []
+
+    def add(path, prefix, block, unit):
+        text, digest, tokens = _core(prefix, block)
+        segs.append(Segment(path, text, digest, tokens, _marker(block), unit))
+
+    for i, t in enumerate(req.get("tools") or []):
+        add(f"tools[{i}]", "tool", t, "tools")
+    s = req.get("system")
+    for i, b in enumerate(([s] if isinstance(s, str) else list(s)) if s else []):
+        add(f"system[{i}]", "system", b, "system")
+    for i, m in enumerate(req.get("messages") or []):
+        c = m["content"]
+        for j, b in enumerate([c] if isinstance(c, str) else list(c)):
+            add(f"messages[{i}].content[{j}]", m["role"], b, f"messages[{i}]")
+    if req.get("cache_control") and segs:            # top-level field = automatic caching
+        last = segs[-1]
+        segs[-1] = Segment(last.path, last.text, last.digest, last.tokens, _ttl(req), last.unit)
+    h, hashes, cum, total = b"", [], [], 0
+    for seg in segs:
+        h = hashlib.blake2b(h + seg.digest, digest_size=12).digest()
+        total += seg.tokens
+        hashes.append(h)
+        cum.append(total)
+    tail = est_tokens(tail_text(req)) if req.get("uncached_tail") else 0
+    return Rendered(segs, hashes, cum, tail, bool(req.get("tools")))
+
+
+def rendered(row: dict) -> Rendered:
+    """The logged request of a row. Rows that came from logs.load() keep the rendering;
+    rows built by hand are left untouched and rendered each time."""
+    if "_rendered" not in row:
+        return render(row["request"])
+    r = row["_rendered"]
+    if r is None:
+        r = row["_rendered"] = render(row["request"])
+    return r
+
+
+def plan_positions(r: Rendered, plan: "BreakPlan | None", ttl: int = FIVE_MIN) -> list[tuple[int, int]]:
+    """Where place_breakpoints puts its markers, as segment indices, without building a request."""
+    head = plan is None or plan.head
+    regions = [s.region for s in r.segments]
+    n_tools, n_system = regions.count("tools"), regions.count("system")
+    out = []
+    if n_tools and head and (plan is None or not n_system):
+        out.append(n_tools - 1)
+    if n_system and head:
+        out.append(n_tools + n_system - 1)
+    first = n_tools + n_system
+    count = len(r.segments) - first
+    if count:
+        last = count - 1
+        idx = {last} if plan is None else {last - o for o in plan.offsets}
+        if plan and plan.const_prefix:
+            idx.add(plan.const_prefix - 1)
+        out += [first + i for i in sorted(i for i in idx if 0 <= i <= last)[-3:]]
+    return [(i, ttl) for i in out]
+
+
 def prefix_blocks(req: dict) -> list[tuple[str, int]]:
     """(serialised block, lifetime of its breakpoint in seconds or 0) in hashing order."""
-    return [(text, ttl) for _, text, ttl in located_blocks(req)]
+    return [(s.text, s.marker) for s in render(req).segments]
 
 
 def located_blocks(req: dict) -> list[tuple[str, str, int]]:
     """(path, serialised block, breakpoint lifetime) in the order the API hashes them:
     tools, then system, then messages."""
-    out: list[tuple[str, str, int]] = []
-    for i, t in enumerate(req.get("tools") or []):
-        out.append((f"tools[{i}]", "tool:" + json.dumps(_strip(t), sort_keys=True), _ttl(t)))
-    s = req.get("system")
-    for i, b in enumerate(_blocks(s) if s else []):
-        out.append((f"system[{i}]", "system:" + json.dumps(_strip(b), sort_keys=True), _ttl(b)))
-    for i, m in enumerate(req.get("messages") or []):
-        for j, b in enumerate(_blocks(m["content"])):
-            out.append((f"messages[{i}].content[{j}]",
-                        m["role"] + ":" + json.dumps(_strip(b), sort_keys=True), _ttl(b)))
-    if req.get("cache_control") and out:            # top-level field = automatic caching
-        p, t, _ = out[-1]
-        out[-1] = (p, t, _ttl(req))
-    return out
+    return [(s.path, s.text, s.marker) for s in render(req).segments]
 
 
 # --------------------------------------------------------------------------- learning
@@ -343,9 +498,9 @@ def learn_breakpoints(reqs: list[dict], window: int = 20,
     need = (write_x - 1) / (1 - read_x)
     seqs, heads = [], []
     for r in reqs:
-        bl = [t for t, _ in prefix_blocks(strip_cache_control(r))]
+        bl = [x.digest for x in r.segments] if isinstance(r, Rendered) else [t for t, _ in prefix_blocks(r)]
         seqs.append(bl)
-        heads.append(sum(1 for t in bl if t.startswith(("tool:", "system:"))))
+        heads.append(r.head if isinstance(r, Rendered) else sum(1 for t in bl if t.startswith(("tool:", "system:"))))
     future = []                                   # blocks of request i repeated by a later one
     for i, cur in enumerate(seqs[:-1]):
         best = 0
@@ -373,33 +528,79 @@ def learn_breakpoints(reqs: list[dict], window: int = 20,
     return BreakPlan(p_head > need, const, offsets, reuse)
 
 
+_CLEAN: dict[int, object] = {}
+
+
+def _clean(block):
+    """The block without cache markers; the same object when it has none. Shared blocks are
+    checked once."""
+    if not isinstance(block, (dict, list)):
+        return block
+    shared = _POOLED.get(id(block)) is block
+    if shared and id(block) in _CLEAN:
+        return _CLEAN[id(block)]
+    out = _strip(block) if "cache_control" in json.dumps(block) else block
+    if shared:
+        _CLEAN[id(block)] = out
+    return out
+
+
+def _unmarked(req: dict) -> dict:
+    """A copy of the request without cache markers. Lists and messages are new; blocks that
+    need no change are the same objects, so nothing here may be modified in place."""
+    out = {}
+    if req.get("tools"):
+        out["tools"] = [_clean(t) for t in req["tools"]]
+    s = req.get("system")
+    if s:
+        out["system"] = s if isinstance(s, str) else [_clean(b) for b in s]
+    if req.get("messages"):
+        out["messages"] = [dict(m, content=m["content"] if isinstance(m["content"], str) else [_clean(b) for b in m["content"]])
+                           for m in req["messages"]]
+    if req.get("uncached_tail"):
+        out["uncached_tail"] = list(req["uncached_tail"])
+    return out
+
+
+def _mark_block(msgs: list[dict], i: int, j: int, ttl: int) -> None:
+    """Put a breakpoint on block j of message i (messages are this call's own copies)."""
+    c = msgs[i]["content"]
+    if isinstance(c, str):
+        msgs[i]["content"] = [{"type": "text", "text": c, "cache_control": cc(ttl)}]
+    else:
+        c[j] = dict(c[j], cache_control=cc(ttl))
+
+
+def _block_positions(msgs: list[dict]) -> list[tuple[int, int]]:
+    return [(i, j) for i, m in enumerate(msgs)
+            for j in range(1 if isinstance(m["content"], str) else len(m["content"]))]
+
+
 def place_breakpoints(req: dict, sort_tools: bool = False, plan: BreakPlan | None = None,
                       ttl: int = FIVE_MIN) -> dict:
     """At most four breakpoints. Without a plan: end of tools, end of system, last message
     block. With a plan: only the positions the plan found worth paying for. Content and
     order are left exactly as written."""
-    out = copy.deepcopy(strip_cache_control(req))
+    out = _unmarked(req)
     head = plan is None or plan.head
     if out.get("tools"):
         if sort_tools:
             out["tools"].sort(key=lambda t: t.get("name", ""))
         if head and (plan is None or not out.get("system")):
-            out["tools"][-1]["cache_control"] = cc(ttl)
+            out["tools"][-1] = dict(out["tools"][-1], cache_control=cc(ttl))
     if out.get("system"):
         out["system"] = _blocks(out["system"])
         if head:
-            out["system"][-1]["cache_control"] = cc(ttl)
-    flat = []
-    for m in out.get("messages", []):
-        m["content"] = [dict(b) for b in _blocks(m["content"])]
-        flat += m["content"]
+            out["system"][-1] = dict(out["system"][-1], cache_control=cc(ttl))
+    msgs = out.get("messages", [])
+    flat = _block_positions(msgs)
     if flat:
         last = len(flat) - 1
         idx = {last} if plan is None else {last - o for o in plan.offsets}
         if plan and plan.const_prefix:
             idx.add(plan.const_prefix - 1)
-        for i in sorted(i for i in idx if 0 <= i <= last)[-3:]:
-            flat[i]["cache_control"] = cc(ttl)
+        for n in sorted(i for i in idx if 0 <= i <= last)[-3:]:
+            _mark_block(msgs, *flat[n], ttl)
     return out
 
 
@@ -413,23 +614,23 @@ def canonicalize_request(req: dict, tpl: Template | None, plan: "BreakPlan | Non
         # nothing to hoist, or the "template" is mostly variable: leave the content alone
         return place_breakpoints(req, sort_tools=True, plan=plan, ttl=ttl)
     static, shared, volatile = applied
-    out = copy.deepcopy(strip_cache_control(req))
+    out = _unmarked(req)
     if out.get("tools"):
         out["tools"].sort(key=lambda t: t.get("name", ""))
-        out["tools"][-1]["cache_control"] = cc(ttl)
+        out["tools"][-1] = dict(out["tools"][-1], cache_control=cc(ttl))
     out["system"] = [{"type": "text", "text": static + "\n\n" + SLOT_NOTE, "cache_control": cc(ttl)}]
     if shared:
         out["system"].append({"type": "text", "text": _fmt(shared), "cache_control": cc(ttl)})
     msgs = out.get("messages", [])
-    for m in msgs:
-        m["content"] = _blocks(m["content"])
-    if msgs and msgs[-1]["content"]:
-        last = msgs[-1]["content"]
-        last[-1] = dict(last[-1], cache_control=cc(ttl))
-        if volatile:
-            ctx = {"type": "text", "text": "<request_context>\n" + _fmt(volatile) + "\n</request_context>"}
-            if msgs[-1]["role"] == "user":
-                last.append(ctx)                 # after the breakpoint: never cached
-            else:
-                out["system"].append(ctx)        # assistant prefill: keep it in system
+    flat = _block_positions(msgs)
+    if flat:
+        i, j = flat[-1]
+        if i == len(msgs) - 1:
+            _mark_block(msgs, i, j, ttl)
+            if volatile:
+                ctx = {"type": "text", "text": "<request_context>\n" + _fmt(volatile) + "\n</request_context>"}
+                if msgs[-1]["role"] == "user":
+                    msgs[-1]["content"].append(ctx)      # after the breakpoint: never cached
+                else:
+                    out["system"].append(ctx)            # assistant prefill: keep it in system
     return out

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from .diagnose import summarise
 from .forecast import Knowledge, Verdict
-from .messages import est_tokens, prefix_blocks, tail_text
+from .messages import rendered
 
 RULES = {
     "CP001": "a value in the system prompt or tools changes between requests",
@@ -86,10 +86,13 @@ def findings(v: Verdict, rows: list[dict], k: Knowledge, show_content: bool = Tr
             what = f"a {g['cause']}" if g["cause"] else "content"
             out.append(Finding("CP007", f"{what} in an earlier message changes between requests "
                                f"({g['count']} times, first at {b.path}){detail}",
+                               ("put the part every query shares in its own content block, or in the system "
+                                "prompt, ahead of the part that changes") if rows and rows[0].get("one_shot")
+                               and b.path.startswith("messages[0]") else
                                "keep earlier messages byte-identical; send changing material "
                                "(file contents, retrieved documents) as late as possible", g["lost_tokens"]))
     if v.rules.mode == "breakpoints" and (v.recommended != "off" or v.fix_option) and \
-            not any(any(ttl for _, ttl in prefix_blocks(r["request"])) for r in rows):
+            not any(rendered(r).markers() for r in rows):
         marker = {"bedrock": "a cachePoint", "openai": "a cache breakpoint"}.get(v.rules.provider, "cache_control")
         out.append(Finding("CP003", f"no request sets {marker}, so nothing is cached",
                            "see the recommendation above before switching it on"))
@@ -102,7 +105,7 @@ def findings(v: Verdict, rows: list[dict], k: Knowledge, show_content: bool = Tr
         out.append(Finding("CP008", f"{v.gaps_over_5m:.0%} of pauses between requests exceed {short}",
                            f"compare the {v.rules.name_long} rows in the forecast" if v.rules.write_long is not None and v.rules.forecast
                            else "nothing cached survives those pauses on this model"))
-    tail = sum(est_tokens(tail_text(r["request"])) for r in rows)
+    tail = sum(rendered(r).tail_tokens for r in rows)
     if tail >= 0.01 * v.tokens:
         out.append(Finding("CP010", f"top-level `instructions` are ~{tail / max(1, v.tokens):.0%} of input tokens; this model "
                            "places them after the input, outside the cache, and bills them in full every time",

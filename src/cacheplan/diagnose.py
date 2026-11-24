@@ -10,7 +10,7 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass
 
-from .messages import est_tokens, located_blocks, strip_cache_control
+from .messages import rendered
 
 WINDOW = 20
 _CAUSES = [
@@ -64,34 +64,34 @@ def _snip(text: str, i: int, width: int = 28) -> str:
 
 def find_breaks(app: str, rows: list[dict]) -> list[Break]:
     out, seen = [], []
+    one_shot = bool(rows and rows[0].get("one_shot"))
     for n, row in enumerate(rows):
-        cur = located_blocks(strip_cache_control(row["request"]))
-        texts = [t for _, t, _ in cur]
+        cur = rendered(row).segments
+        ids = [x.digest for x in cur]
         best, prev = -1, None
         for cand in seen[-WINDOW:]:
             k = 0
-            while k < min(len(cand), len(texts)) and cand[k] == texts[k]:
+            while k < min(len(cand), len(cur)) and cand[k].digest == ids[k]:
                 k += 1
             if k >= best:                              # ties: the most recent one
                 best, prev = k, cand
-        seen.append(texts)
+        seen.append(cur)
         if prev is None or best >= len(prev):          # first request, or a pure continuation
             continue
-        lost = sum(est_tokens(t) for t in prev[best:])
-        if best >= len(texts):
-            out.append(Break(app, n, cur[-1][0] if cur else "request", "removed", lost))
+        lost = sum(x.tokens for x in prev[best:])
+        if best >= len(cur):
+            out.append(Break(app, n, cur[-1].path if cur else "request", "removed", lost))
             continue
-        path, now_t = cur[best][0], texts[best]
-        was_t = prev[best]
-        if path == "messages[0].content[0]":           # a different conversation, not a break
+        path, now_t, was_t = cur[best].path, cur[best].text, prev[best].text
+        if path == "messages[0].content[0]" and not one_shot:   # a different conversation, not a break
             continue
-        if path.startswith("tools") and sorted(t for t in prev if t.startswith("tool:")) == \
-                sorted(t for t in texts if t.startswith("tool:")):
+        if path.startswith("tools") and sorted(x.digest for x in prev if x.region == "tools") == \
+                sorted(x.digest for x in cur if x.region == "tools"):
             out.append(Break(app, n, path, "tool order", lost))
-        elif path.startswith("messages") and any(t in texts[best + off + 1:best + off + 14]   # moved further down
-                 for off, t in enumerate(prev[best:best + 4])):
+        elif path.startswith("messages") and any(x.digest in ids[best + off + 1:best + off + 14]   # moved further down
+                 for off, x in enumerate(prev[best:best + 4])):
             out.append(Break(app, n, path, "inserted", lost))
-        elif now_t in prev[best + 1:best + 12]:
+        elif ids[best] in [x.digest for x in prev[best + 1:best + 12]]:
             out.append(Break(app, n, path, "removed", lost))
         else:
             i = 0

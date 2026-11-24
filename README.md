@@ -44,11 +44,14 @@ Bedrock and Gemini logs are read too, with [limits](#providers).
 - [Why layout matters](#why-layout-matters)
 - [Reading the report](#reading-the-report)
 - [Commands](#commands)
+- [Logs you already have](#logs-you-already-have)
+- [Apply the plan](#apply-the-plan)
 - [Providers](#providers)
 - [Rules](#rules)
 - [Use it in CI](#use-it-in-ci)
 - [Benchmark: six agent starters](#benchmark-six-agent-starters)
 - [How accurate is the forecast?](#how-accurate-is-the-forecast)
+- [Speed and memory](#speed-and-memory)
 - [Limits](#limits)
 - [Related tools](#related-tools)
 - [Roadmap](#roadmap)
@@ -186,6 +189,7 @@ react-template
 | `cacheplan quality LOG --model M --yes` | Check whether the prompt fix changes the model's answers, against a control |
 | `cacheplan baseline LOG --save FILE` / `--compare FILE` | Save a content-free summary and fail later runs that are worse |
 | `cacheplan capture --out LOG` | Record requests and their token usage through a local proxy. `--provider openai` or `gemini` for those APIs; `--no-content` scrambles prompt text |
+| `cacheplan plan LOG --save plan.json` | Show the recommended action per application and save it for the wrapper (see [Apply the plan](#apply-the-plan)) |
 | `cacheplan rules` | List rule ids |
 | `cacheplan providers` | Show, per provider, what is forecast, the source of its rules and the live evidence behind them |
 
@@ -198,12 +202,14 @@ Useful options:
 - `--fail-on CP001,CP002` makes `report` exit with status 1 when those findings appear.
 - `--price N` sets the input price in USD per million tokens; by default it is looked up from the model.
 - `--html report.html` also writes a self-contained page you can forward.
+- `--app-field`, `--session-field`, `--no-split` and `--one-shot` control how requests are
+  grouped into applications and conversations; see [Grouping](docs/grouping.md).
 
 **Log formats.** One JSON object per line, and formats can be mixed in one file: a
 `cacheplan capture` line, a raw request body (Anthropic Messages, OpenAI Chat Completions or
 Responses, Bedrock Converse, Gemini generateContent), or a
 [promptcachelint](https://github.com/OsmnvAslan/promptcachelint) trace record. The provider
-is detected per line.
+is detected per line. Exports from tracing tools are read too; see the next section.
 
 ### Real token counts
 
@@ -240,6 +246,49 @@ from cacheplan.record import record_bedrock
 client = record_bedrock(boto3.client("bedrock-runtime"), "requests.jsonl", app="my-app")
 ```
 
+## Logs you already have
+
+If you already trace your application, start there instead of capturing:
+
+```
+cacheplan report langfuse-export.jsonl
+```
+
+| Tool | Read from |
+| --- | --- |
+| Langfuse | Observation exports (JSON or JSONL); `GENERATION` observations |
+| LangSmith | Run exports; `llm` runs |
+| OpenTelemetry | OTLP JSON or span lines, in the GenAI, OpenLLMetry or OpenInference conventions |
+| LiteLLM | The standard logging payload |
+
+A trace records what the tracing integration saw, which is not always what the provider
+received: tool definitions and cache markers are often missing. What changes between
+requests carries over well; costs are rougher than from a capture, and the report says so.
+These readers follow the formats' documentation and have not been run on a real production
+export yet. Details: [Logs from tracing tools](docs/exports.md).
+
+## Apply the plan
+
+**Experimental.** Save the recommendation, then let a wrapper add the cache markers to live
+requests, without touching your prompt-building code:
+
+```
+cacheplan plan requests.jsonl --save plan.json
+```
+
+```python
+import anthropic
+from cacheplan.apply import PlanTransport
+
+client = anthropic.Anthropic(http_client=anthropic.DefaultHttpxClient(
+    transport=PlanTransport("plan.json", app="my-app")))
+```
+
+It adds or replaces cache markers and nothing else: no content is changed, moved or
+dropped, and the prompt fix is never applied automatically. If rewriting fails, the request
+goes out as your application built it. Anthropic Messages API only, and tested against a
+stand-in so far, not live traffic. Details: [Applying a plan](docs/apply.md).
+
 ## Providers
 
 Every request is converted to one internal shape, so diagnosis and findings work the same
@@ -252,7 +301,7 @@ everywhere. What differs is how much of the forecast each provider's documentati
 | Bedrock, Nova | Yes | Yes, set `--price` | Off, planned breakpoints; 5-minute only | No |
 | OpenAI, GPT-5.6 and later | Yes | Yes | Off, automatic, planned breakpoints, prompt fix; 30-minute and 12-hour; writes at 1.25x and 2.5x | Two runs, automatic mode |
 | OpenAI, GPT-5.5 and earlier | Yes | Yes | Automatic only (no write fee, nothing to switch on), prompt fix; in-memory and 24h retention | One run |
-| Gemini | Yes | No | None | No |
+| Gemini | Yes | Estimate under stated assumptions | Automatic only, prompt fix; cache lifetime assumed to be 5 minutes | No |
 
 What to know before relying on the non-Anthropic rows:
 
@@ -279,14 +328,16 @@ What to know before relying on the non-Anthropic rows:
 - **OpenAI, GPT-6.2 and later:** top-level `instructions` are appended after the input,
   cannot be cached, and are billed in full on every request (OpenAI's guide). They are
   modelled that way and reported as `CP010`. Not checked live.
-- **Gemini:** its documentation does not state the cached-token discount or how long
-  implicit caches live, so there is no cost forecast. Explicit caches (`cachedContents`) are
-  not modelled.
+- **Gemini:** the forecast rests on two assumptions the documentation does not settle: that
+  an implicit cache hit is billed at the listed cached-input price, and that an implicit
+  cache lives for 5 minutes. The report labels it as an estimate. Explicit caches
+  (`cachedContents`) are not modelled. Models without a built-in price get diagnosis only.
 - **Bedrock, Claude models:** Anthropic's prices are assumed. Check your Bedrock rates and
   pass `--price` if they differ. InvokeModel bodies do not name the model; pass `--model`.
 - `verify` and `quality` send requests to the Anthropic API only.
 - `cacheplan providers` prints this ledger from the same table the forecast uses, with the
-  source of each rule set and the evidence behind it.
+  source of each rule set and the evidence behind it. [docs/providers.md](docs/providers.md)
+  is generated from it.
 - Applications from other providers are labelled, for example `my-app [openai]`.
 
 ## Rules
@@ -313,7 +364,7 @@ As a GitHub Action:
 - uses: actions/setup-python@v7
   with:
     python-version: "3.12"
-- uses: shamiksaharcciit-oss/cacheplan@v0.3.0a2
+- uses: shamiksaharcciit-oss/cacheplan@v0.4.0a1
   with:
     log: captures/session.jsonl
     min-reusable: "0.5"
@@ -326,7 +377,7 @@ The action installs the code of the revision you pin, so the tag decides what ru
 prompt text. Or call the commands directly:
 
 ```yaml
-- run: pip install cacheplan==0.3.0a2
+- run: pip install cacheplan==0.4.0a1
 - run: cacheplan check captures/session.jsonl --min-reusable 0.5
 - run: cacheplan baseline captures/session.jsonl --compare captures/baseline.json
 ```
@@ -396,6 +447,22 @@ session, so read it as "on a par with hand-tuned caching", not as a win. Claude 
 its ceiling already (27%, local forecast only, never measured), and `cacheplan` recommended
 changing nothing.
 
+## Speed and memory
+
+Measured with [`benchmarks/scale/scale.py`](benchmarks/scale/scale.py) on a 2-core cloud
+machine (Python 3.13): scripted agent traffic with tools, long system prompts and growing
+conversations, about 3,500 input tokens per request.
+
+| Requests | Log size | Total | Peak memory |
+| ---: | ---: | ---: | ---: |
+| 1,000 | 10 MB | 0.7 s | 52 MB |
+| 10,000 | 104 MB | 6.3 s | 294 MB |
+| 100,000 | 1,045 MB | 68.4 s | 2,743 MB |
+
+The whole log is held in memory, at roughly two and a half times its size on disk. For
+logs beyond a few hundred thousand requests, analyse a sample (a day, or one application).
+More: [Speed and memory](docs/scaling.md).
+
 ## Limits
 
 - **Small evidence base.** Eight applications, one or two short sessions each, one model.
@@ -430,6 +497,7 @@ support OpenAI as well as Anthropic. If you only need miss diagnosis, look at th
 | Flag timestamps and similar | Yes | Yes | Yes |
 | OpenAI support | Yes | Yes | Yes, not yet checked live |
 | In-process SDK recording | Yes | Yes | Yes |
+| Read Langfuse, LangSmith, OpenTelemetry, LiteLLM exports | | | Yes, not yet on real exports |
 | Forecast cost for each caching option | | | Yes |
 | Plan where to place breakpoints | | | Yes |
 | Recommend off, 5-minute or 1-hour | | | Yes |
@@ -439,10 +507,18 @@ Comparison made on 23 November 2026 against promptcachelint 0.1.0 and cachelint 
 
 ## Roadmap
 
-- Read Langfuse, LangSmith, OpenTelemetry and LiteLLM exports
-- Live verification for OpenAI and Bedrock; a Gemini forecast once its rules are documented
-- A wrapper that applies the plan automatically, once the quality check has more evidence
-- Longer sessions and more frameworks in the benchmark
+- Live checks for the paths that are documentation only: OpenAI breakpoints and GPT-6.x,
+  Bedrock, Gemini
+- `verify` for OpenAI
+- Real production exports for the tracing-tool readers
+- Live evidence for the plan wrapper, then a decision on whether it leaves "experimental"
+- More frameworks, longer sessions and a second model in the published benchmark
+- Analysing logs larger than memory
+
+## More documentation
+
+[docs/](docs/README.md): tracing-tool exports, grouping, applying a plan, the provider
+ledger, speed and memory, and how the tool works inside.
 
 ## Development
 
@@ -453,7 +529,8 @@ pip install -e ".[dev]"
 python -m pytest -q
 ```
 
-Issues and pull requests are welcome, especially logs (with content removed) from
-applications where the forecast and the live result disagree.
+Issues and pull requests are welcome, especially logs from applications where the forecast
+and the live result disagree (`capture --no-content` keeps prompt text out of them). See
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 Licence: [Apache-2.0](LICENSE).
