@@ -260,6 +260,7 @@ class Verdict:
     measured: Usage | None = None     # the provider's own counts for this log, if recorded
     rules: Rules = field(default_factory=Rules)   # the provider's caching rules for this model
     warm_start: bool = False          # the first logged request already read from the cache
+    source: str = "capture"           # where the log came from: capture, or a tracing tool's export
 
     @property
     def plan(self) -> BreakPlan:
@@ -376,5 +377,6 @@ def examine(rows: list[dict], k: Knowledge | None = None, min_tokens: int | None
             u, pick, reason, fix, k.plans.get(app) or {}, breaks, in_sample,
             k.floors[app], bool(min_tokens) or s.known, sizes[len(sizes) // 2], s.read_x,
             price if price is not None else s.input_price, cal, measured, s,
-            bool(real_usage(rs[0]) and real_usage(rs[0]).cache_read_input_tokens)))
+            bool(real_usage(rs[0]) and real_usage(rs[0]).cache_read_input_tokens),
+            rs[0].get("source") or "capture"))
     return sorted(out, key=lambda v: -v.tokens)

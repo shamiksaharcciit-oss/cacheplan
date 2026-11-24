@@ -350,7 +350,10 @@ def usage_parts(u: dict) -> tuple[int, int, int, int] | None:
         return int(u["promptTokenCount"]) - cached, 0, cached, 0
     if "prompt_tokens" in u:                                            # OpenAI Chat Completions
         d = u.get("prompt_tokens_details") or {}
-        cached, written = int(d.get("cached_tokens") or 0), int(d.get("cache_write_tokens") or 0)
+        cached = int(d.get("cached_tokens") or u.get("cache_read_input_tokens") or 0)
+        written = int(d.get("cache_write_tokens") or d.get("cache_creation_tokens") or u.get("cache_creation_input_tokens") or 0)
+        if cached + written > int(u["prompt_tokens"]):                  # prompt_tokens given without the cache part
+            return int(u["prompt_tokens"]), written, cached, 0
         return int(u["prompt_tokens"]) - cached - written, written, cached, 0
     if "input_tokens_details" in u:                                     # OpenAI Responses
         d = u.get("input_tokens_details") or {}

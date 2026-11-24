@@ -16,6 +16,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import readers
 from .messages import share_blocks, system_text
 
 
@@ -56,7 +57,8 @@ def _row(d: dict, default_app: str, n: int, app_field: str | None = None, sessio
         return "no request found"
     raw = req
     try:
-        provider, req = normalise(req, provider)
+        if not d.get("normalised"):                      # lines from readers.py arrive converted
+            provider, req = normalise(req, provider)
     except (AttributeError, TypeError, KeyError):
         return "request could not be read"
     if not isinstance(req.get("messages"), list):
@@ -67,7 +69,8 @@ def _row(d: dict, default_app: str, n: int, app_field: str | None = None, sessio
     app = _field(d, raw, app_field) or app
     session = _field(d, raw, session_field) or session
     return {"ts": float(ts) if ts else float(n), "app": app or default_app, "session": session,
-            "request": req, "usage": usage, "provider": provider, "_rendered": None}
+            "request": req, "usage": usage, "provider": provider or "anthropic", "_rendered": None,
+            "source": d.get("source") or "capture"}
 
 
 def _lines(text: str) -> set[str]:
@@ -87,21 +90,23 @@ def load(paths, app_field: str | None = None, session_field: str | None = None,
     log, skipped = Log(), defaultdict(int)
     for src, path in enumerate([paths] if isinstance(paths, (str, Path)) else list(paths)):
         p = Path(path)
-        for n, line in enumerate(p.read_text(encoding="utf-8").splitlines()):
-            if not line.strip():
-                continue
+        n = -1
+        for record in readers.records(p.read_text(encoding="utf-8")):
             try:
-                row = _row(json.loads(line), p.stem, n, app_field, session_field)
-            except json.JSONDecodeError:
-                row = "invalid JSON"
-            if isinstance(row, str):
-                skipped[row] += 1
-                continue
-            row["_src"] = src
-            row["one_shot"] = one_shot
-            if row["provider"] != "anthropic" and not row["app"].endswith(f"[{row['provider']}]"):
-                row["app"] = f"{row['app']} [{row['provider']}]"
-            log.rows.append(row)
+                lines = [record] if isinstance(record, str) else readers.expand(record)
+            except (AttributeError, TypeError, KeyError, ValueError):
+                lines = "record could not be read"
+            for line in ([lines] if isinstance(lines, str) else lines):
+                n += 1
+                row = line if isinstance(line, str) else _row(line, p.stem, n, app_field, session_field)
+                if isinstance(row, str):
+                    skipped[row] += 1
+                    continue
+                row["_src"] = src
+                row["one_shot"] = one_shot
+                if row["provider"] != "anthropic" and not row["app"].endswith(f"[{row['provider']}]"):
+                    row["app"] = f"{row['app']} [{row['provider']}]"
+                log.rows.append(row)
     log.rows.sort(key=lambda r: (r["_src"], r["ts"]))
     clusters: dict[str, list[set]] = defaultdict(list)
     for r in log.rows:

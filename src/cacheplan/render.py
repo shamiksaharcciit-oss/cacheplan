@@ -65,6 +65,10 @@ def _advice(v: Verdict) -> list[str]:
         lines.append(f"With the prompt fix in the findings: {v.cost(v.fix_option):.0%} "
                      f"({v.label(v.fix_option).lower()}). It changes what the model reads, "
                      "so compare answer quality before adopting it.")
+    if v.source != "capture":
+        lines.append(f"Note: read from a {v.source} export. A tracer records the messages its integration saw, which "
+                     "may differ from what the provider received (tools, cache markers, order), so treat the "
+                     "costs as rougher than from a capture.")
     if v.rules.note and v.rules.provider != "anthropic":
         lines.append(f"Note ({v.rules.provider}): {v.rules.note}.")
     if v.rules.provider != "anthropic" and v.rules.forecast:
@@ -143,7 +147,7 @@ def as_dict(v: Verdict, fs: list[Finding]) -> dict:
                               "responses": v.calibration.responses},
         "cache_read_multiplier": v.read_x, "input_price_per_million": v.price,
         "measured_cost_vs_no_caching": None if v.measured_cost is None else round(v.measured_cost, 4),
-        "provider": v.rules.provider, "caching_mode": v.rules.mode,
+        "provider": v.rules.provider, "caching_mode": v.rules.mode, "log_source": v.source,
         "options": {o: {"label": v.label(o), "read_share": round(v.read(o), 4),
                         "cost_vs_no_caching": round(v.cost(o), 4),
                         "cost_usd": None if v.dollars(o) is None else round(v.dollars(o), 6)}
