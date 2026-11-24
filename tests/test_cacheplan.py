@@ -1046,3 +1046,18 @@ def test_provider_page_is_generated_from_the_rules_in_use():
     page = Path(__file__).resolve().parent.parent / "docs" / "providers.md"
     assert page.read_text(encoding="utf-8") == cli.ledger_markdown(), \
         "docs/providers.md is out of date: run `cacheplan providers --markdown > docs/providers.md`"
+
+
+def test_prompt_labels_differ_and_snippets_show_plain_text(tmp_path):
+    opening = "Act as an expert software developer.\n"
+    a = opening + "Always use best practices when coding.\n" + "Rule about edits number one, kept the same.\n" * 30
+    b = opening + "Describe the changes for a commit message.\n" + "Guidance about commit style, kept the same.\n" * 30
+    rows = [{"ts": float(i), "request": {"system": a if i % 2 else b, "messages": [
+        {"role": "user", "content": [{"type": "text", "text": "start"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "File contents: alpha beta" + (" gamma" if i < 4 else "")}]},
+        {"role": "user", "content": [{"type": "text", "text": f"turn {i}"}]}]}} for i in range(8)]
+    loaded = load(_write(tmp_path, "tool.jsonl", rows)).rows
+    labels = {r["app"] for r in loaded}
+    assert labels == {'tool#1 "Describe the changes for a commit messag"', 'tool#2 "Always use best practices when coding."'}
+    changed = [x for app, rs in by_app(loaded).items() for x in find_breaks(app, rs) if x.kind == "changed"]
+    assert changed and all('"type"' not in x.now and '"type"' not in x.was for x in changed)

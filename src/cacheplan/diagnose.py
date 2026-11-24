@@ -6,6 +6,7 @@ prefix, the prefix broke there, and everything behind the break has to be paid f
 """
 from __future__ import annotations
 
+import json
 import re
 from collections import defaultdict
 from dataclasses import dataclass
@@ -62,6 +63,19 @@ def _snip(text: str, i: int, width: int = 28) -> str:
     return ("…" if i > width else "") + text[max(0, i - width):i + width // 2].replace("\n", " ")
 
 
+def _plain(text: str) -> str:
+    """The readable part of a serialised block: its text if it is a text block, else as is."""
+    try:
+        body = json.loads(text.split(":", 1)[1])
+    except (ValueError, IndexError):
+        return text
+    if isinstance(body, dict) and isinstance(body.get("text"), str):
+        return body["text"]
+    if isinstance(body, dict) and isinstance(body.get("content"), str):
+        return body["content"]
+    return text
+
+
 def find_breaks(app: str, rows: list[dict]) -> list[Break]:
     out, seen = [], []
     one_shot = bool(rows and rows[0].get("one_shot"))
@@ -94,6 +108,7 @@ def find_breaks(app: str, rows: list[dict]) -> list[Break]:
         elif ids[best] in [x.digest for x in prev[best + 1:best + 12]]:
             out.append(Break(app, n, path, "removed", lost))
         else:
+            was_t, now_t = _plain(was_t), _plain(now_t)
             i = 0
             while i < min(len(was_t), len(now_t)) and was_t[i] == now_t[i]:
                 i += 1

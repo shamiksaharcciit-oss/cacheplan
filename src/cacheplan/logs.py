@@ -73,6 +73,21 @@ def _row(d: dict, default_app: str, n: int, app_field: str | None = None, sessio
             "source": d.get("source") or "capture"}
 
 
+def _label(system: str, others: list[set]) -> str:
+    """A short name for one prompt among several: its first line, or, when another prompt
+    opens with the same line, the first line that only this one has."""
+    lines = [l.strip() for l in system.strip().split("\n") if l.strip()]
+    if not lines:
+        return "(no system prompt)"
+    taken = set().union(*others) if others else set()
+    stripped = {l.strip() for l in taken}
+    if lines[0] in stripped:
+        own = next((l for l in lines if len(l) >= 12 and l not in stripped), None)
+        if own:
+            return own[:40]
+    return lines[0][:40]
+
+
 def _lines(text: str) -> set[str]:
     return {l for l in text.split("\n") if len(l.strip()) >= 12}
 
@@ -119,11 +134,13 @@ def load(paths, app_field: str | None = None, session_field: str | None = None,
             reps.append(ls)
             k = len(reps) - 1
         r["_cluster"] = k
+    names: dict[tuple[str, int], str] = {}
     for r in log.rows:
         k = r.pop("_cluster")
         if split_prompts and len(clusters[r["app"]]) > 1:
-            first = system_text(r["request"]).strip().split("\n")[0][:40]
-            r["app"] = f'{r["app"]}#{k + 1} "{first}"'
+            if (r["app"], k) not in names:
+                names[(r["app"], k)] = _label(system_text(r["request"]), [c for j, c in enumerate(clusters[r["app"]]) if j != k])
+            r["app"] = f'{r["app"]}#{k + 1} "{names[(r["app"], k)]}"'
     log.skipped = dict(skipped)
     return log
 
