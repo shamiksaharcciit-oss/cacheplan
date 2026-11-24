@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Applications split by system prompt are named by the first line that tells them apart,
+  when two prompts open with the same sentence.
+- Examples in findings show the block's own text, without fragments of its JSON wrapper.
+- The OpenAI how-to uses the documented breakpoint form, `"prompt_cache_breakpoint":
+  {"mode": "explicit"}`, and says the implicit breakpoint can stay.
+- Drivers for live checks: `benchmarks/providers/anthropic_driver.py` (with `--plan` for the
+  wrapper) and `openai_driver.py --explicit` (Responses API with explicit breakpoints).
+
 ## 0.4.0a1
 
 - **Reads exports from Langfuse, LangSmith, OpenTelemetry and LiteLLM.** The report says when
@@ -31,7 +41,7 @@
 - **OpenAI GPT-6.2 and later: top-level `instructions` are no longer treated as a cacheable
   system prompt.** Those models append them after the input and bill them uncached on every
   request. They are modelled that way and reported as the new finding `CP010`. Found in an
-  external review; forecasts for such requests were too optimistic in 0.3.0a1.
+  external review; earlier forecasts for such requests were too optimistic.
 - **The GitHub Action installs the code of the revision it is pinned to**, instead of
   whatever `pip install cacheplan` resolves to. `version` still selects a PyPI release.
 - `capture --no-content` (and `no_content=True` on the recorders) scrambles prompt text as it

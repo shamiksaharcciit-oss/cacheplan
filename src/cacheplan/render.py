@@ -30,8 +30,9 @@ def _how(v: Verdict) -> str:
             return ('How: pass  additionalModelRequestFields={"cache_control": {"type": "ephemeral"'
                     + (', "ttl": "1h"' if long else "") + "}}  to Converse (Claude models that support it).")
         return 'How: add  "cache_control": {"type": "ephemeral"' + (', "ttl": "1h"' if long else "") + "}  at the top level of each request."
-    marker = {"openai": '"prompt_cache_options": {"mode": "explicit"' + (', "ttl": "12h"' if long else "")
-                        + '} and a "prompt_cache_breakpoint": {} on the content part',
+    marker = {"openai": 'a  "prompt_cache_breakpoint": {"mode": "explicit"' + (', "ttl": "12h"' if long else "")
+                        + "}  on the content part (the default implicit breakpoint can stay; it already covers "
+                          "the latest message)",
               "bedrock": '{"cachePoint": {"type": "default"' + (', "ttl": "1h"' if long else "") + "}} blocks"}.get(
                   provider, "cache_control breakpoints")
     life = f" with the {v.rules.name_long} lifetime" if long and provider == "anthropic" else ""
