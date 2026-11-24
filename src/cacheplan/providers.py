@@ -159,12 +159,14 @@ def _evidence(r: Rules) -> str:
     if r.provider == "gemini":
         return "list prices plus two stated assumptions (cache lifetime, billing of implicit hits); not compared with live billing"
     if r.provider == "anthropic":
-        return "live: 14 forecast-vs-billed rows on claude-sonnet-5-5, all within 2 points (2026-11-24)"
+        return ("live: 14 forecast-vs-billed rows on claude-sonnet-5-5, all within 2 points; the plan wrapper once "
+                "(15% vs 14%); a Hermes Agent session (16% vs 16%) (2026-11-24)")
     if r.provider == "openai" and r.mode == "implicit":
         return "live: 2 runs on gpt-5.4-mini, 19% vs 21% and 23% vs 17% with a warm cache (2026-11-23)"
     if r.provider == "openai":
-        return ("live: 3 runs on gpt-5.6-luna (2026-11-24): automatic mode 19% vs 19% and 125% vs 125%, explicit "
-                "breakpoints 19% vs 21%; the 12-hour lifetime and GPT-6.x are documentation only")
+        return ("live: 4 runs on gpt-5.6-luna (2026-11-24): automatic mode 19% vs 19% and 125% vs 125%, explicit "
+                "breakpoints 19% vs 21%, a Hermes Agent session 20% vs 20%; the 12-hour lifetime and GPT-6.x are "
+                "documentation only")
     return "documentation only; not compared with live billing"
 
 
