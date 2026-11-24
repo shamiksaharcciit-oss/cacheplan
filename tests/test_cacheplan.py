@@ -251,6 +251,8 @@ def test_fix_keeps_messages_tools_and_api_rules(corpus_rows):
         assert [m["role"] for m in c["messages"]] == [m["role"] for m in row["request"]["messages"]]
         assert 1 <= sum(1 for _, ttl in prefix_blocks(c) if ttl) <= 4
         for m in c["messages"]:
+            if isinstance(m["content"], str):               # untouched messages keep their form
+                continue
             kinds = [b["type"] for b in m["content"]]
             if "tool_result" in kinds:
                 assert kinds[0] == "tool_result"

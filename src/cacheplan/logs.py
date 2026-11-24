@@ -16,7 +16,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .messages import system_text
+from .messages import share_blocks, system_text
 
 
 @dataclass
@@ -48,8 +48,9 @@ def _row(d: dict, default_app: str, n: int) -> dict | str:
         return "no messages in the request"
     if model and not req.get("model"):
         req = dict(req, model=model)
+    req = share_blocks(req)
     return {"ts": float(ts) if ts else float(n), "app": app or default_app, "session": session,
-            "request": req, "usage": usage, "provider": provider}
+            "request": req, "usage": usage, "provider": provider, "_rendered": None}
 
 
 def _lines(text: str) -> set[str]:

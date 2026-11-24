@@ -9,10 +9,10 @@ It is a model, not the service: use `cacheplan verify` for real numbers.
 """
 from __future__ import annotations
 
-import hashlib
+import os
 from dataclasses import dataclass
 
-from .messages import ONE_HOUR, est_tokens, located_blocks, prefix_blocks, tail_text
+from .messages import CHARS_PER_TOKEN, ONE_HOUR, Rendered, render
 from .models import TOOL_USE_OVERHEAD
 
 LOOKBACK = 20
@@ -44,11 +44,6 @@ class Usage:
                 + self.cache_read_input_tokens * read_x)
 
 
-def _unit(path: str) -> str:
-    """The message a block belongs to: "tools", "system" or "messages[i]"."""
-    return path.split(".")[0] if path.startswith("messages") else path.split("[")[0]
-
-
 class CacheSim:
     def __init__(self, min_tokens: int = 1024, ttl_short: int = 300, ttl_long: int = 3600,
                  message_entries: bool = False):
@@ -63,22 +58,23 @@ class CacheSim:
 
     def request(self, req: dict, now: float, min_tokens: int | None = None,
                 overhead: int | None = None, scale: float = 1.0) -> Usage:
-        """overhead: tokens the API adds when tools are defined; scale: correction applied
-        to the character-based token estimate (1.0 = uncalibrated)."""
+        """One request with the breakpoints it carries."""
+        r = render(req)
+        return self.run(r, r.markers(), now, min_tokens, overhead, scale)
+
+    def run(self, r: Rendered, breakpoints: list[tuple[int, int]], now: float, min_tokens: int | None = None,
+            overhead: int | None = None, scale: float = 1.0) -> Usage:
+        """breakpoints: (segment index, marker kind). overhead: tokens the API adds when
+        tools are defined; scale: correction applied to the character-based token estimate
+        (1.0 = uncalibrated)."""
         floor = self.min_tokens if min_tokens is None else min_tokens
-        extra = TOOL_USE_OVERHEAD if overhead is None else overhead
-        located = located_blocks(req)
-        blocks = [(text, ttl) for _, text, ttl in located]
-        h, hashes, cum = b"", [], []
-        total = extra if req.get("tools") else 0               # hidden tool-use instructions
-        for text, _ in blocks:
-            h = hashlib.blake2b(h + text.encode(), digest_size=12).digest()
-            total += est_tokens(text) * scale
-            hashes.append(h)
-            cum.append(total)
-        bps = [(i, self.ttl_long if ttl >= ONE_HOUR else self.ttl_short)
-               for i, (_, ttl) in enumerate(blocks) if ttl and cum[i] >= floor]
-        tail = round(est_tokens(tail_text(req)) * scale) if req.get("uncached_tail") else 0
+        extra = (TOOL_USE_OVERHEAD if overhead is None else overhead) if r.has_tools else 0
+        hashes = r.hashes
+        size = lambda i: extra + r.cum[i] * scale             # tokens up to and including segment i
+        total = size(len(r.cum) - 1) if r.cum else extra
+        tail = round(r.tail_tokens * scale)
+        bps = [(i, self.ttl_long if kind >= ONE_HOUR else self.ttl_short)
+               for i, kind in sorted(breakpoints) if size(i) >= floor]
         if not bps:
             return Usage(input_tokens=round(total) + tail)
         read = -1
@@ -97,15 +93,13 @@ class CacheSim:
             self.entries[hashes[bp]] = (now + ttl, ttl)
             if self.message_entries:
                 for j in range(read + 1, bp):
-                    here, after = located[j][0], located[j + 1][0]
-                    ends_message = _unit(here) != "tools" and _unit(here) != _unit(after)
-                    if ends_message and cum[j] >= floor and self.entries.get(hashes[j], (0, 0))[0] <= now + ttl:
+                    if r.ends_message(j) and size(j) >= floor and self.entries.get(hashes[j], (0, 0))[0] <= now + ttl:
                         self.entries[hashes[j]] = (now + ttl, ttl)
         end = max(bps[-1][0], read)
-        r = round(cum[read]) if read >= 0 else 0
-        w = round(cum[end]) - r
+        got = round(size(read)) if read >= 0 else 0
+        w = round(size(end)) - got
         long_lived = bool(written) and written[-1][1] == self.ttl_long and self.ttl_long != self.ttl_short
-        return Usage(round(total) - round(cum[end]) + tail, w, r, w if long_lived else 0)
+        return Usage(round(total) - round(size(end)) + tail, w, got, w if long_lived else 0)
 
 
 class ImplicitSim:
@@ -115,22 +109,28 @@ class ImplicitSim:
 
     def __init__(self, ttl: float, interval: int = 128, keep: int = 200):
         self.ttl, self.interval, self.keep = ttl, max(1, interval), keep
-        self.seen: list[tuple[float, str]] = []
+        self.seen: list[tuple[float, Rendered]] = []
 
     def request(self, req: dict, now: float, min_tokens: int = 1024, overhead: int = 0, scale: float = 1.0) -> Usage:
-        import os
-        text = "\x00".join(t for t, _ in prefix_blocks(req))
-        total = round(est_tokens(text) * scale) + (overhead if req.get("tools") else 0)
-        best = 0
+        return self.run(render(req), now, min_tokens, overhead, scale)
+
+    def run(self, r: Rendered, now: float, min_tokens: int = 1024, overhead: int = 0, scale: float = 1.0) -> Usage:
+        total = round(r.cum[-1] * scale if r.cum else 0) + (overhead if r.has_tools else 0) + round(r.tail_tokens * scale)
+        best, mine = 0.0, r.segments
         for i, (ts, prev) in enumerate(self.seen):
             if now - ts > self.ttl:
                 continue
-            n = len(os.path.commonprefix([prev, text]))
-            if n > best:
-                best = n
+            theirs, n = prev.segments, 0
+            while n < min(len(mine), len(theirs)) and mine[n].digest == theirs[n].digest:
+                n += 1
+            shared = float(r.cum[n - 1]) if n else 0.0
+            if n < min(len(mine), len(theirs)):              # part of the first differing block
+                shared += len(os.path.commonprefix([mine[n].text, theirs[n].text])) / CHARS_PER_TOKEN
+            if shared > best:
+                best = shared
                 self.seen[i] = (now, prev)                 # a read keeps the entry alive
-        self.seen = [(ts, t) for ts, t in self.seen if now - ts <= self.ttl][-self.keep:] + [(now, text)]
-        cached = round(est_tokens(text[:best]) * scale) if best else 0
+        self.seen = [(ts, p) for ts, p in self.seen if now - ts <= self.ttl][-self.keep:] + [(now, r)]
+        cached = round(best * scale)
         cached -= cached % self.interval
         if cached < min_tokens:
             cached = 0
