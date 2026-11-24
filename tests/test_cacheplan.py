@@ -995,3 +995,40 @@ def test_reads_opentelemetry_spans_in_three_conventions(tmp_path, capsys):
 def datetime_text(ts):
     from datetime import datetime, timezone
     return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")
+
+
+def test_plan_wrapper_adds_markers_and_changes_nothing_else(tmp_path, capsys):
+    httpx = pytest.importorskip("httpx")
+    from cacheplan import apply
+    log = _write(tmp_path, "agent.jsonl", inserting_agent(8))
+    plan_file = str(tmp_path / "plan.json")
+    assert cli.main(["plan", log, "--save", plan_file, "--model", "claude-sonnet-5-5"]) == 0
+    saved = json.loads(open(plan_file).read())
+    assert "policy" not in json.dumps(saved) and len(saved["applications"]) == 1          # no prompt text
+    entry = apply.load(plan_file)
+    assert entry["action"] == "plan" and entry["plan"]
+
+    seen = []
+
+    def upstream_reply(request):
+        seen.append(request)
+        return httpx.Response(200, json={"usage": {"input_tokens": 1}})
+    client = httpx.Client(transport=apply.PlanTransport(plan_file, inner=httpx.MockTransport(upstream_reply)))
+    original = dict(inserting_agent(8)[5]["request"], model="claude-sonnet-5-5", max_tokens=64, temperature=0)
+    client.post("https://api.anthropic.com/v1/messages", headers={"x-api-key": "k"}, json=original)
+    client.post("https://api.anthropic.com/v1/messages/count_tokens", json=original)       # other paths pass through
+    sent = json.loads(seen[0].content)
+    assert int(seen[0].headers["content-length"]) == len(seen[0].content) and seen[0].headers["x-api-key"] == "k"
+    assert 1 <= sum(1 for _, ttl in prefix_blocks(sent) if ttl) <= 4
+    same = lambda a, b: [t for t, _ in prefix_blocks(a)] == [t for t, _ in prefix_blocks(b)]
+    assert same(sent, original)                                                             # same content, same order
+    assert (sent["model"], sent["max_tokens"], sent["temperature"]) == ("claude-sonnet-5-5", 64, 0)
+    assert json.loads(seen[1].content) == original
+
+    auto = apply.rewrite(original, {"action": "auto", "lifetime": "1h"})
+    assert auto["cache_control"] == {"type": "ephemeral", "ttl": "1h"} and same(auto, original)
+    assert apply.rewrite(original, {"action": "off"}) is original
+    broken = httpx.Request("POST", "https://api.anthropic.com/v1/messages", content=b"not json")
+    assert apply._rewritten(broken, entry) is broken                                        # fails open
+    with pytest.raises(ValueError, match="Pass app="):
+        apply.load(plan_file, app="someone-else")

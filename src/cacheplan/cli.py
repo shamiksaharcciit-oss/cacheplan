@@ -225,6 +225,24 @@ def cmd_capture(a) -> int:
     return 0
 
 
+def cmd_plan(a) -> int:
+    """Show, and optionally save, the recommended action per application in a form the
+    PlanTransport wrapper can apply. No prompt text is written."""
+    from . import apply
+    from .render import plan_words
+    rows, k = _load(a)
+    verdicts = examine(rows, k, a.min_tokens, a.model)
+    for v in verdicts:
+        where = "; ".join(plan_words(v.plan)) if v.recommended.startswith("plan") else ""
+        print(f"{v.app}: {v.label(v.recommended)}, forecast {v.cost(v.recommended):.0%} of the uncached input cost"
+              + (f"\n  breakpoints at {where}" if where else "")
+              + ("" if v.rules.provider == "anthropic" else "\n  not saved: the wrapper applies plans to the Anthropic API only"))
+    if a.save:
+        data = apply.save(verdicts, a.save, __version__)
+        print(f"\nsaved the plan for {len(data['applications'])} application(s) to {a.save}")
+    return 0
+
+
 def cmd_providers(_) -> int:
     """The provider support ledger: what is forecast, from which source, with what evidence."""
     from .providers import rules
@@ -329,6 +347,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-content", action="store_true",
                    help="scramble prompt text before writing it; reports still work, without readable examples")
     p.set_defaults(fn=cmd_capture)
+
+    p = sub.add_parser("plan", help="the recommended action per application; --save writes it for the wrapper")
+    common(p)
+    p.add_argument("--save", metavar="FILE")
+    p.set_defaults(fn=cmd_plan)
 
     sub.add_parser("rules", help="list rule ids").set_defaults(fn=cmd_rules)
     sub.add_parser("providers", help="what is forecast per provider, from which source, with what evidence"
