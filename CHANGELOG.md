@@ -7,6 +7,7 @@
 - Examples in findings show the block's own text, without fragments of its JSON wrapper.
 - The OpenAI how-to uses the documented breakpoint form, `"prompt_cache_breakpoint":
   {"mode": "explicit"}`, and says the implicit breakpoint can stay.
+- The plan wrapper has its first live run: forecast 15%, billed 14% behind the wrapper.
 - Drivers for live checks: `benchmarks/providers/anthropic_driver.py` (with `--plan` for the
   wrapper) and `openai_driver.py --explicit` (Responses API with explicit breakpoints).
 

@@ -56,6 +56,9 @@ client = anthropic.Anthropic(http_client=anthropic.DefaultHttpxClient(
 - Positions are counted in content blocks from the end of the request. If your application
   later changes how it assembles prompts, the plan goes stale: re-run `cacheplan plan`.
   `cacheplan baseline` in CI catches the drift.
-- It has been tested against a stand-in transport, not yet on live traffic. Verify with
-  a capture taken *behind* the wrapper: the report's "As logged" row should match the
-  forecast in `plan.json`.
+- Live evidence is one run: on 24 November 2026, 15 requests on `claude-sonnet-5-5`
+  (`benchmarks/providers/anthropic_driver.py`, three conversations sharing a system prompt)
+  were forecast by the saved plan at 15% of the uncached input cost and billed at 14% behind
+  the wrapper, with 92% of input tokens read from the cache. Check it on your own traffic
+  with a capture taken *behind* the wrapper: the report's "Forecast check" line should be
+  close to the forecast in `plan.json`.

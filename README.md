@@ -286,8 +286,8 @@ client = anthropic.Anthropic(http_client=anthropic.DefaultHttpxClient(
 
 It adds or replaces cache markers and nothing else: no content is changed, moved or
 dropped, and the prompt fix is never applied automatically. If rewriting fails, the request
-goes out as your application built it. Anthropic Messages API only, and tested against a
-stand-in so far, not live traffic. Details: [Applying a plan](docs/apply.md).
+goes out as your application built it. Anthropic Messages API only. One live run so far:
+forecast 15% of the uncached input cost, billed 14%. Details: [Applying a plan](docs/apply.md).
 
 ## Providers
 
@@ -511,7 +511,8 @@ Comparison made on 23 November 2026 against promptcachelint 0.1.0 and cachelint 
   Bedrock, Gemini
 - `verify` for OpenAI
 - Real production exports for the tracing-tool readers
-- Live evidence for the plan wrapper, then a decision on whether it leaves "experimental"
+- More live evidence for the plan wrapper (one run so far), then a decision on whether it
+  leaves "experimental"
 - More frameworks, longer sessions and a second model in the published benchmark
 - Analysing logs larger than memory
 
